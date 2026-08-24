@@ -518,3 +518,34 @@ Writing stays opt-in (blocker B8, difference 23): without `--write` the config
 goes to stdout, and `--write` never replaces an existing file without `--force`.
 When the project still has a gem config the command says so and exits 1, because
 `migrate-config` keeps the ignore lists and this command has none of them.
+
+## 26. Search globs are matched against the root-relative path
+
+**Gem.** `file_finder.rb:34-50` matches `search.only` and `search.exclude` with
+`File.fnmatch?` against the path `Find.find` yielded. `Find.find` yields the
+`search.paths` entry as it was written and then appends to it, so the spelling of
+the entry leaks into the match: under `paths: ['.']` the target is `./app/x.rb`,
+and an exclude for it has to be written `*/app/x.rb` or `./app/x.rb`.
+
+**Here.** The target is the path relative to the config root — `app/x.rb`,
+`/`-separated, no `./` — whichever `search.paths` entry it was found under. A
+glob is written against the path as the project lays it out, and not against the
+spelling of the search path that reached it.
+
+For the ordinary case, `paths: [app/]`, the two are the same string. They part
+company for `paths: ['.']`, and for an absolute `search.paths` entry, which the
+gem matches whole. This tool matches such a path whole too, because it has no
+root-relative form, so that case agrees again by accident rather than by rule.
+
+A wildcard-free glob matches the directory it names *and* everything under it,
+because pruning in `Find.find` drops the subtree. It does not match at every
+depth: `node_modules` is not `**/node_modules`, which is what `fnmatch` does.
+
+`migrate-config` keeps `search.only` and `search.exclude` verbatim, so a gem
+config whose globs carry a leading `*/` for the `.`-rooted form needs it removed
+by hand. Nothing detects that for the author: the glob compiles and matches
+nothing.
+
+This replaces the earlier behaviour of matching the absolute path, under which
+any glob holding a `*` was silently dead. Section 4 of
+[`design-notes.md`](design-notes.md) has that story.

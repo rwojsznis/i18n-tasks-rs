@@ -195,12 +195,15 @@ Not implemented, on purpose.
 
 ---
 
-## 4. Two behaviours that only a gem spec pins down
+## 4. Three behaviours the gem states only in code
 
-Both of these were port bugs, caught by the last specs to be ported. They are
-written up here because the code that gets them right looks arbitrary without
-them. Neither fix changed any of the four differential reports in
-[`accepted-diffs.md`](accepted-diffs.md).
+All three were port bugs. The first two were caught by the last specs to be
+ported, and neither fix changed any of the four differential reports in
+[`accepted-diffs.md`](accepted-diffs.md). The third was caught by review, not by
+a spec — the ported spec had its globs rewritten to fit the bug, so it passed.
+
+They are written up here because the code that gets them right looks arbitrary
+without them.
 
 ### The read pattern decides which files name a locale
 
@@ -228,6 +231,29 @@ a direct path go through it, so a named file meets the same hidden, `only` and
 `exclude` rules the gem applies to it.
 
 ref: `spec/scanners/files/file_finder_spec.rb`.
+
+### What the search globs are matched against
+
+`search.only` and `search.exclude` are matched against the root-relative path —
+`app/views/x.rb`, `/`-separated, with no `./` — and not against the absolute
+one. `Finder::match_path` strips `cfg.root` to get there.
+
+Matching the absolute path looks harmless and is not. A wildcard-free pattern
+kept working, because `build_globs` also added `**/{g}` variants for it, so
+`exclude: [app/webpack]` matched and hid the problem. A pattern holding a `*`
+got no such variant and was matched against `/Users/…/app/legacy/y.rb`, which
+nobody writes a glob for: `exclude` silently did nothing, and `only` silently
+matched nothing. An `only` that matches nothing is the damaging half — the scan
+finds no used keys, so `unused` reports every key in the project, and a human
+acting on that report deletes live translations.
+
+The gem matches `File.fnmatch?` against the path `Find.find` yielded, which
+carries the `search.paths` entry as written. Root-relative is the same string
+for the ordinary `paths: [app/]` case and a stable one for the rest; accepted
+difference 26 covers where the two part company.
+
+A path that is not under the root — an absolute `search.paths` entry — keeps its
+full form, because a glob for it has to be written that way.
 
 ---
 
