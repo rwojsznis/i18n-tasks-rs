@@ -565,3 +565,12 @@ nothing.
 This replaces the earlier behaviour of matching the absolute path, under which
 any glob holding a `*` was silently dead. Section 4 of
 [`design-notes.md`](design-notes.md) has that story.
+
+## 27. `clean-config` removes stale ignore rules
+
+The gem has no command that checks whether an `ignore`, `ignore_missing`,
+`ignore_unused`, `ignore_eq_base` or `ignore_inconsistent_interpolations` rule
+still suppresses a report row. This command builds the reports with all ignore
+rules disabled and removes rules that match no row. It prints a diff by default
+and writes only with `--write`. The edit keeps the config text and comments,
+except for comments attached directly to a removed list item.
