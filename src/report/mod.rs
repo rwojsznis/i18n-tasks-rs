@@ -1,3 +1,4 @@
+pub mod eq_base;
 pub mod interpolations;
 pub mod missing;
 pub mod normalize;

@@ -97,6 +97,7 @@ fn every_command_is_byte_identical_at_every_job_count() {
     for command in [
         "find",
         "unused",
+        "eq-base",
         "missing",
         "check-consistent-interpolations",
         "check-normalized",

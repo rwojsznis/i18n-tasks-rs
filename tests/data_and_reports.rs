@@ -1,4 +1,4 @@
-//! Locale data loading and the four read-only reports, end to end.
+//! Locale data loading and the read-only reports, end to end.
 //!
 //! Ported from spec/file_system_data_spec.rb and the report specs.
 
@@ -6,7 +6,7 @@ use i18n_tasks_rs::config::Config;
 use i18n_tasks_rs::data::load::{Store, Value};
 use i18n_tasks_rs::pattern::PatternSet;
 use i18n_tasks_rs::report::missing::MissingType;
-use i18n_tasks_rs::report::{Outcome, Reason, interpolations, missing, unused};
+use i18n_tasks_rs::report::{Outcome, Reason, eq_base, interpolations, missing, unused};
 use i18n_tasks_rs::stats::forest_stats;
 use i18n_tasks_rs::used::UsedKeys;
 use std::path::{Path, PathBuf};
@@ -46,6 +46,44 @@ impl Drop for Project {
 }
 
 const BASIC_CONFIG: &str = "base_locale: en\nlocales: [en, es]\ndata:\n  read:\n    - config/locales/%{locale}.yml\nsearch:\n  paths: [app/]\n";
+
+#[test]
+fn eq_base_matches_the_gem_and_honours_per_locale_ignores() {
+    // ref: spec/i18n_tasks_spec.rb:226-229
+    // ref: lib/i18n/tasks/missing_keys.rb:31-36,132-137
+    let p = Project::new("eqbase");
+    p.write(
+        "config/locales/en.yml",
+        "en:\n  same: Same\n  different: EN\n  sequence: [{one: 1, two: 2}]\n  ignored_all: Same\n  ignored_es: Same\n  only_base: Same\n",
+    )
+    .write(
+        "config/locales/es.yml",
+        "es:\n  same: Same\n  different: ES\n  sequence: [{two: 2, one: 1}]\n  ignored_all: Same\n  ignored_es: Same\n  only_es: Same\n",
+    );
+    let cfg = p.config(
+        "base_locale: en\nlocales: [en, es]\ndata:\n  read:\n    - config/locales/%{locale}.yml\nignore_eq_base:\n  all: [ignored_all]\n  es: [ignored_es]\n",
+    );
+    let store = Store::load(&cfg).unwrap();
+    let report = eq_base::report(&cfg, &store, &store.locales);
+    assert_eq!(
+        report.rows,
+        vec![
+            i18n_tasks_rs::report::KeyRow {
+                locale: "es".into(),
+                key: "same".into(),
+                value: Some("Same".into()),
+                reason: None,
+            },
+            i18n_tasks_rs::report::KeyRow {
+                locale: "es".into(),
+                key: "sequence".into(),
+                value: Some("[{\"two\" => 2, \"one\" => 1}]".into()),
+                reason: None,
+            },
+        ]
+    );
+    assert_eq!(report.outcome(), Outcome::Found);
+}
 
 #[test]
 fn overlapping_read_globs_are_deduplicated_and_merge_in_order() {

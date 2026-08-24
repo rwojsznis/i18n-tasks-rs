@@ -14,7 +14,7 @@ use clap::{Parser, Subcommand};
 use i18n_tasks_rs::config::{Config, DEFAULT_CONFIG_PATH};
 use i18n_tasks_rs::data::load::Store;
 use i18n_tasks_rs::report::missing::MissingType;
-use i18n_tasks_rs::report::{Outcome, interpolations, missing, normalize, unused};
+use i18n_tasks_rs::report::{Outcome, eq_base, interpolations, missing, normalize, unused};
 use i18n_tasks_rs::stats::{ForestStats, forest_stats};
 use i18n_tasks_rs::used::UsedKeys;
 use i18n_tasks_rs::{init, migrate};
@@ -190,6 +190,11 @@ enum Command {
     },
     /// Report translations that the source never uses.
     Unused {
+        #[command(flatten)]
+        common: Common,
+    },
+    /// Report translations whose value is the same as in the base locale.
+    EqBase {
         #[command(flatten)]
         common: Common,
     },
@@ -456,6 +461,7 @@ impl Session {
 enum Check {
     Missing(missing::MissingReport),
     Unused(unused::UnusedReport),
+    EqBase(eq_base::EqBaseReport),
     ConsistentInterpolations(interpolations::InterpolationReport),
     ReservedInterpolations(interpolations::InterpolationReport),
     Normalized(normalize::NormalizeReport),
@@ -468,6 +474,7 @@ impl Check {
         match self {
             Check::Missing(_) => "missing",
             Check::Unused(_) => "unused",
+            Check::EqBase(_) => "eq_base",
             Check::ConsistentInterpolations(_) => "check_consistent_interpolations",
             Check::ReservedInterpolations(_) => "check_reserved_interpolations",
             Check::Normalized(_) => "check_normalized",
@@ -478,6 +485,7 @@ impl Check {
         match self {
             Check::Missing(r) => r.outcome(),
             Check::Unused(r) => r.outcome(),
+            Check::EqBase(r) => r.outcome(),
             Check::ConsistentInterpolations(r) | Check::ReservedInterpolations(r) => r.outcome(),
             Check::Normalized(r) => r.outcome(),
         }
@@ -487,6 +495,7 @@ impl Check {
         match self {
             Check::Missing(r) => r.to_text(),
             Check::Unused(r) => r.to_text(),
+            Check::EqBase(r) => r.to_text(),
             Check::ConsistentInterpolations(r) | Check::ReservedInterpolations(r) => r.to_text(),
             // `normalize` prints the same report differently, so the report has
             // two renderers and this is the read-only one.
@@ -512,6 +521,11 @@ fn run() -> Result<u8, String> {
             let used = s.scan()?;
             let report = unused::report(&s.cfg, &s.store, &used, &s.locales);
             emit(&s, &Check::Unused(report))
+        }
+        Command::EqBase { common } => {
+            let s = Session::open(common)?;
+            let report = eq_base::report(&s.cfg, &s.store, &s.locales);
+            emit(&s, &Check::EqBase(report))
         }
         Command::CheckConsistentInterpolations { common } => {
             let s = Session::open(common)?;
