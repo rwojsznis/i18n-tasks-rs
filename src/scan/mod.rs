@@ -65,6 +65,8 @@ impl ScanConfig {
 
     /// The longest configured relative root the file lies under.
     pub fn matching_root(&self, path: &Path) -> Option<&str> {
+        #[cfg(test)]
+        ROOT_LOOKUPS.with(|c| c.set(c.get() + 1));
         let p = path.to_string_lossy().replace('\\', "/");
         self.relative_roots
             .iter()
@@ -81,6 +83,19 @@ impl ScanConfig {
             .iter()
             .any(|p| p.trim_end_matches('/') == root.trim_end_matches('/'))
     }
+}
+
+/// Counts `matching_root` calls, so a test can pin that a scanner asks the
+/// question once per file rather than once per node. Thread-local, because the
+/// test harness runs each test on its own thread and a global would race.
+#[cfg(test)]
+pub(crate) fn root_lookups_on_this_thread() -> usize {
+    ROOT_LOOKUPS.with(std::cell::Cell::get)
+}
+
+#[cfg(test)]
+thread_local! {
+    static ROOT_LOOKUPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// Maps a byte offset in a synthetic buffer back to the file it came from.

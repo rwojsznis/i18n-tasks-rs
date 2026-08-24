@@ -135,7 +135,6 @@ struct ScopeRange {
 
 struct Visitor<'a> {
     path: &'a Path,
-    cfg: &'a ScanConfig,
     loc: Locator<'a>,
     scopes: Vec<Scope>,
     ranges: Vec<ScopeRange>,
@@ -146,6 +145,10 @@ struct Visitor<'a> {
     root_caps: Caps,
     /// ref: relative_keys.rb:26-28
     append_method_name: bool,
+    /// Blocker B6: whether the file lies under a configured relative root.
+    /// The answer belongs to the file, so `new` asks once and every class node
+    /// reads it.
+    under_root: bool,
     view_component_file: bool,
     out: FileScan,
 }
@@ -170,7 +173,6 @@ impl<'a> Visitor<'a> {
             .unwrap_or_default();
         Visitor {
             path,
-            cfg,
             loc,
             scopes: Vec::new(),
             ranges: Vec::new(),
@@ -180,6 +182,7 @@ impl<'a> Visitor<'a> {
                 candidate: false,
             },
             append_method_name: !root.is_some_and(|r| cfg.skips_method_name(r)),
+            under_root: root.is_some(),
             view_component_file: posix.contains("app/components/"),
             out: FileScan::default(),
         }
@@ -417,10 +420,6 @@ impl<'pr> pr::Visit<'pr> for Visitor<'_> {
         let mut path = self.parent_path().to_vec();
         path.extend(own);
 
-        // Blocker B6: a class in a file under a configured relative root
-        // supports relative keys too, not only controllers, mailers and
-        // ViewComponents.
-        let under_root = self.cfg.matching_root(self.path).is_some();
         let scope = Scope {
             kind: ScopeKind::Class {
                 view_component,
@@ -428,7 +427,10 @@ impl<'pr> pr::Visit<'pr> for Visitor<'_> {
             },
             path: path.into(),
             caps: Caps {
-                relative: controller || mailer || view_component || under_root,
+                // Blocker B6: a class in a file under a configured relative
+                // root supports relative keys too, not only controllers,
+                // mailers and ViewComponents.
+                relative: controller || mailer || view_component || self.under_root,
                 candidate: controller,
             },
         };
@@ -1103,5 +1105,54 @@ mod tests {
             keyword_hash(&hash.as_keyword_hash_node().unwrap())
         });
         assert_eq!(kwargs, vec![("scope".to_string(), ArgVal::Unresolvable)]);
+    }
+
+    /// The relative root belongs to the file, not to the node: a file with
+    /// twenty classes must not ask the question twenty times. `Visitor::new`
+    /// already has the answer.
+    #[test]
+    fn the_relative_root_is_looked_up_once_per_file() {
+        let cfg = ScanConfig {
+            relative_roots: vec!["app/views".to_string(), "app/controllers".to_string()],
+            relative_exclude_method_name_paths: Vec::new(),
+        };
+        let path = Path::new("app/controllers/books_controller.rb");
+        let one = b"class BooksController
+  def show
+    t('.x')
+  end
+end
+"
+        .to_vec();
+        let mut many = Vec::new();
+        for i in 0..20 {
+            many.extend_from_slice(
+                format!(
+                    "class C{i}Controller
+  def show
+    t('.x')
+  end
+end
+"
+                )
+                .as_bytes(),
+            );
+        }
+
+        let before = crate::scan::root_lookups_on_this_thread();
+        let scan_one = scan(&one, path, &cfg);
+        let for_one = crate::scan::root_lookups_on_this_thread() - before;
+
+        let before = crate::scan::root_lookups_on_this_thread();
+        let scan_many = scan(&many, path, &cfg);
+        let for_many = crate::scan::root_lookups_on_this_thread() - before;
+
+        assert_eq!(scan_one.keys.len(), 1);
+        assert_eq!(scan_many.keys.len(), 20);
+        assert_eq!(for_one, 1);
+        assert_eq!(
+            for_many, for_one,
+            "the lookup count follows the class count"
+        );
     }
 }
