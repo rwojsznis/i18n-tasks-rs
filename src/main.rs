@@ -17,7 +17,7 @@ use i18n_tasks_rs::report::missing::MissingType;
 use i18n_tasks_rs::report::{Outcome, eq_base, interpolations, missing, normalize, unused};
 use i18n_tasks_rs::stats::{ForestStats, forest_stats};
 use i18n_tasks_rs::used::UsedKeys;
-use i18n_tasks_rs::{init, migrate};
+use i18n_tasks_rs::{clean_config, init, migrate};
 use serde::ser::SerializeMap;
 use serde::{Serialize, Serializer};
 use std::path::{Path, PathBuf};
@@ -221,6 +221,14 @@ enum Command {
         common: Common,
         #[command(flatten)]
         flags: NormalizeFlags,
+    },
+    /// Remove ignore rules that suppress no current issue.
+    CleanConfig {
+        #[command(flatten)]
+        common: Common,
+        /// Write the cleaned config. Without this, print a diff only.
+        #[arg(long)]
+        write: bool,
     },
     /// Run every check and print the statistics header.
     Health {
@@ -549,6 +557,7 @@ fn run() -> Result<u8, String> {
             let s = Session::open(common)?;
             normalize_command(&s, flags)
         }
+        Command::CleanConfig { common, write } => clean_config_command(common, *write),
         Command::Health { common } => health(common),
         Command::Find { common } => {
             let s = Session::open(common)?;
@@ -557,6 +566,49 @@ fn run() -> Result<u8, String> {
         }
         Command::InitConfig { flags } => init_config(flags),
         Command::MigrateConfig { flags } => migrate_config(flags),
+    }
+}
+
+fn clean_config_command(common: &Common, write: bool) -> Result<u8, String> {
+    let source = std::fs::read_to_string(&common.config)
+        .map_err(|e| format!("cannot read config {}: {e}", common.config.display()))?;
+    let session = Session::open(common)?;
+    let used = session.scan()?;
+    let report = clean_config::plan(
+        &session.cfg,
+        &session.store,
+        &used,
+        &session.locales,
+        &source,
+        &common.config,
+    )?;
+    if session.json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "check": "clean_config",
+                "written": write && !report.is_clean(),
+                "config_digest": session.cfg.digest,
+                "locales": session.locales,
+                "stale_rules": report.stale_rules,
+            }))
+            .map_err(|e| e.to_string())?
+        );
+    } else {
+        print!("{}", report.diff());
+    }
+    if report.is_clean() {
+        return Ok(EXIT_OK);
+    }
+    if write {
+        std::fs::write(&common.config, &report.cleaned)
+            .map_err(|e| format!("cannot write {}: {e}", common.config.display()))?;
+        Ok(EXIT_OK)
+    } else {
+        if !session.json {
+            println!("Nothing was written. Pass `--write` to apply.");
+        }
+        Ok(EXIT_FOUND)
     }
 }
 

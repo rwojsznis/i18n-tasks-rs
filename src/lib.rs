@@ -4,6 +4,7 @@
 // panic *is* the failure report. `clippy.toml` exempts the unit tests in `src/`.
 #![warn(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+pub mod clean_config;
 pub mod config;
 pub mod data;
 pub mod discover;

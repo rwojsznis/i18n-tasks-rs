@@ -220,7 +220,6 @@ An unknown key is an error, with the supported list in the message.
 | `src/report/` | `unused`, `missing`, `eq-base`, the interpolation checks, `normalize` |
 | `src/used.rs` | the used-key set, scanned once for every locale, in parallel |
 | `src/yaml.rs` | a YAML reader over the `saphyr-parser` event stream |
-| `examples/phase_timing.rs` | where the wall clock goes, stage by stage |
 | `tests/fixtures/` | the gem's own scanner fixtures, plus two config fixtures |
 | `tests/golden/` | the emitter's golden input and output |
 | `docs/design-notes.md` | why the port looks the way it does; blockers B1–B10 |
