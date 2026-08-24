@@ -1,0 +1,7 @@
+en:
+  users:
+    index:
+      title: Users
+      notice: Saved
+  shared:
+    ok: OK

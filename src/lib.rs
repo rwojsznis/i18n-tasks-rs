@@ -1,6 +1,7 @@
 pub mod config;
 pub mod data;
 pub mod discover;
+pub mod init;
 pub mod keys;
 pub mod lineindex;
 pub mod migrate;
