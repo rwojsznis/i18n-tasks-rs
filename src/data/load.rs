@@ -10,7 +10,7 @@
 
 use crate::config::{Config, interpolate_locale};
 use crate::walk::{Descend, walk};
-use crate::yaml::{self, Node};
+use crate::yaml::{self, Node, Resolved};
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -560,12 +560,16 @@ fn to_value(node: &Node, path: &Path, in_sequence: bool) -> Result<Value, String
                     value
                 ));
             }
-            Ok(match value.as_str() {
-                "" | "~" | "null" | "Null" | "NULL" => Value::Nil,
-                "true" | "True" | "TRUE" => Value::Bool(true),
-                "false" | "False" | "FALSE" => Value::Bool(false),
-                other if is_numberish(other) => Value::Plain(other.to_string()),
-                other => Value::Str(other.to_string()),
+            // One resolver answers this for the emitter too, so a value the
+            // loader calls a number is never quoted back into a string.
+            Ok(match yaml::resolve_plain(value) {
+                Resolved::Null => Value::Nil,
+                Resolved::Bool(b) => Value::Bool(b),
+                // A number and a date keep the form they were written in, so
+                // the file round-trips unchanged and Psych reads the same
+                // Integer, Float or Date as before.
+                Resolved::Number | Resolved::Timestamp => Value::Plain(value.clone()),
+                Resolved::Str => Value::Str(value.clone()),
             })
         }
     }
@@ -580,11 +584,6 @@ fn is_symbol_reference(value: &str) -> bool {
         && rest
             .chars()
             .all(|c| c.is_alphanumeric() || c == '_' || c == '.')
-}
-
-fn is_numberish(s: &str) -> bool {
-    let t = s.strip_prefix(['-', '+']).unwrap_or(s);
-    !t.is_empty() && t.starts_with(|c: char| c.is_ascii_digit()) && s.parse::<f64>().is_ok()
 }
 
 /// Expands a glob relative to `root`. Only `*` and `**` are supported, which is

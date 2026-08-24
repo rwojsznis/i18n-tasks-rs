@@ -602,3 +602,41 @@ default `SIGPIPE` handler instead would need `libc` and an `unsafe` block, and
 the crate sets `unsafe_code = "forbid"`.
 
 Covered by `tests/broken_pipe.rs`.
+
+---
+
+## 29. A number keeps the form it was written in
+
+**Gem.** Psych reads a plain scalar into a Ruby object and the gem dumps that
+object back, so every number is written in decimal, whatever the source said.
+`0x1f` becomes `31`, `017` becomes `15`, `1:30` becomes `5400`, and a report
+prints the decimal too.
+
+**Here.** `yaml::resolve_plain` names the type; the value keeps its source text
+(`Value::Plain`) and is written back byte for byte. So `normalize` leaves
+`hexy: 0x1f` alone, and `missing`, `unused` and `data` print `0x1f` where the
+gem prints `31`.
+
+Psych reads the same integer from either spelling, so the value the Rails app
+sees is the same. The difference is visible in two places only: the source text
+of a file the gem would have rewritten, and the `Base value` column of a report.
+
+Preserving the text is the safer half of the trade. The emitter targets value
+preservation, not Psych's bytes (blocker B1), and rewriting `0x1f` to `31` in a
+file a human wrote is a change no one asked for. It also removes the reverse
+failure, which was a real bug: before one resolver answered for both directions,
+the loader read `0x1f` as a string and the emitter then quoted it, so
+`normalize --write` turned the integer `31` into the string `"0x1f"`. The same
+held for `1:30`, `.inf` and every date.
+
+Two plain forms *are* rewritten, because they have no source text to keep — the
+emitter writes them from the tag:
+
+- a boolean in any of Psych's spellings becomes `true` or `false`, so
+  `flag: yes` becomes `flag: true`. This is what the gem does;
+- `~`, `Null` and any other casing of `null` become the empty value.
+
+`resolve_plain` is exact about `null` and the booleans for that reason, and may
+name a few strings as numbers or dates — `1e5` is one. That direction is safe:
+the loader keeps the text and the emitter writes it back unquoted, so Psych
+reads the string it read before.

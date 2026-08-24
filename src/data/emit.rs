@@ -340,97 +340,16 @@ fn needs_escapes(s: &str) -> bool {
     s.chars().any(char::is_control)
 }
 
-/// Q6. The YAML 1.1 resolver that Psych uses, in the subset that can appear in
-/// locale data. Over-reporting only costs a pair of quotes, so the checks err
-/// towards "not a string".
+/// Q6. A plain scalar that YAML 1.1 does not read back as a string.
+///
+/// The answer comes from `yaml::resolve_plain`, the same resolver the loader
+/// classifies with, so the two cannot disagree about a value's type. The four
+/// extras are values Psych reads as strings but that are worth a pair of
+/// quotes anyway: `y` and `n`, which a less strict YAML 1.1 reader takes for
+/// booleans, and `<<` and `=`, Psych's merge and value keys.
 fn resolves_to_non_string(s: &str) -> bool {
-    matches!(
-        s,
-        "" | "~"
-            | "null"
-            | "Null"
-            | "NULL"
-            | "true"
-            | "True"
-            | "TRUE"
-            | "false"
-            | "False"
-            | "FALSE"
-            | "y"
-            | "Y"
-            | "n"
-            | "N"
-            | "yes"
-            | "Yes"
-            | "YES"
-            | "no"
-            | "No"
-            | "NO"
-            | "on"
-            | "On"
-            | "ON"
-            | "off"
-            | "Off"
-            | "OFF"
-            | "<<"
-            | "="
-    ) || is_yaml_number(s)
-        || is_timestamp(s)
-}
-
-fn is_yaml_number(s: &str) -> bool {
-    let body = s.strip_prefix(['-', '+']).unwrap_or(s);
-    if body.is_empty() {
-        return false;
-    }
-    if matches!(body, ".inf" | ".Inf" | ".INF" | ".nan" | ".NaN" | ".NAN") {
-        return true;
-    }
-    // `0x1f`, `0b1010` and `0o17`, underscores included.
-    for (prefix, radix) in [
-        ("0x", 16u32),
-        ("0X", 16),
-        ("0b", 2),
-        ("0B", 2),
-        ("0o", 8),
-        ("0O", 8),
-    ] {
-        if let Some(digits) = body.strip_prefix(prefix) {
-            let digits = digits.replace('_', "");
-            return !digits.is_empty() && digits.chars().all(|c| c.is_digit(radix));
-        }
-    }
-    let plain = body.replace('_', "");
-    if plain.is_empty() {
-        return false;
-    }
-    // Bare octal: a leading zero and nothing but octal digits.
-    if plain.len() > 1 && plain.starts_with('0') && plain.chars().all(|c| c.is_digit(8)) {
-        return true;
-    }
-    // Sexagesimal, which YAML 1.1 reads as a number: `1:30`, `1:30:15.5`.
-    if plain.contains(':')
-        && plain
-            .split(':')
-            .all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit() || c == '.'))
-    {
-        return true;
-    }
-    plain.parse::<i64>().is_ok() || (plain.parse::<f64>().is_ok() && !plain.contains(['x', 'X']))
-}
-
-/// A YAML 1.1 timestamp starts with `yyyy-m-d`.
-fn is_timestamp(s: &str) -> bool {
-    let mut parts = s.splitn(3, '-');
-    let (Some(y), Some(m), Some(rest)) = (parts.next(), parts.next(), parts.next()) else {
-        return false;
-    };
-    let day: String = rest.chars().take_while(char::is_ascii_digit).collect();
-    y.len() == 4
-        && y.chars().all(|c| c.is_ascii_digit())
-        && (1..=2).contains(&m.len())
-        && m.chars().all(|c| c.is_ascii_digit())
-        && (1..=2).contains(&day.len())
+    !matches!(crate::yaml::resolve_plain(s), crate::yaml::Resolved::Str)
+        || matches!(s, "y" | "Y" | "n" | "N" | "<<" | "=")
 }
 
 fn single_quoted(s: &str) -> String {
@@ -809,25 +728,6 @@ mod tests {
         assert_eq!(scalar(" a\\b\nc"), "\" a\\\\b\\nc\"");
         // A tab anywhere rules out the block form too.
         assert_eq!(scalar("tab\there\nx"), "\"tab\\there\\nx\"");
-    }
-
-    /// The number test is reached only for values Q2 lets through, so exercise
-    /// it directly. ref: Psych's `ScalarScanner`.
-    #[test]
-    fn yaml_number_recognition() {
-        for v in [
-            "1", "-1", "+1", "1.5", "1_000", ".inf", ".Inf", ".INF", ".nan", ".NaN", ".NAN",
-            "0x1f", "0X1F", "0b1010", "0B1010", "0o17", "0O17", "010", "1e5", "1.0e-5",
-            // Not octal, but Ruby still reads it as the integer 89.
-            "089",
-        ] {
-            assert!(is_yaml_number(v), "{v} is a number");
-        }
-        for v in [
-            "", "-", "+", "_", "0x", "0b", "0xzz", "1.2.3", "e5", "12a", "1-2", ".in",
-        ] {
-            assert!(!is_yaml_number(v), "{v} is not a number");
-        }
     }
 
     /// A key follows the same quoting rules as a value, including the double
