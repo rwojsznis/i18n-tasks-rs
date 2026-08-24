@@ -1,39 +1,15 @@
-//! `init-config`: a config generated from the project's own layout.
+//! What the project looks like: the locale files, the base locale, the search
+//! paths, and the directories that use relative keys.
 //!
-//! The gem's answer to "how do I start" is to copy a template
-//! (`templates/config/i18n-tasks.yml`), which is the same file for every
-//! project and therefore right about nothing except the defaults. This command
-//! looks at the project instead:
-//!
-//!   * `data.read` is derived from the locale files that are actually there,
-//!     and every one of them must be matched by a pattern that was emitted —
-//!     checked here with [`locale_for_path`], the loader's own rule, not with a
-//!     second implementation of it;
-//!   * `data.write` is the first candidate target that those same patterns read
-//!     back, so a later `normalize --write` cannot put keys where nothing looks
-//!     for them;
-//!   * `base_locale` comes from `config.i18n.default_locale` in the project's
-//!     Ruby, read as text — blocker B3 applies here as everywhere else;
-//!   * `search.relative_roots` keeps the gem defaults that exist, and adds a
-//!     directory only when a file under it uses a relative key. That is exactly
-//!     the condition under which a relative root does anything.
-//!
-//! Everything that cannot be detected is written out commented, so the file
-//! still documents the supported surface the way the gem's template does.
-//!
-//! The result is parsed back with [`Config::parse`] and loaded with
-//! [`Store::load`] before the command offers to write it, so the header can
-//! report what the settings actually read.
+//! Everything here reads. Nothing is executed — blocker B3 — so a setting the
+//! project computes in Ruby is not detected, and [`detect`] says so in a note
+//! rather than guessing.
 
-use crate::config::{Config, DEFAULT_RELATIVE_ROOTS, interpolate_locale};
-use crate::data::load::{Store, locale_for_path};
-use crate::stats::forest_stats;
+use crate::config::{DEFAULT_RELATIVE_ROOTS, interpolate_locale};
+use crate::data::load::locale_for_path;
 use crate::walk::{Descend, walk};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-
-/// The file the generated config is written to.
-pub const INIT_TARGET: &str = "config/i18n-tasks-rs.yml";
 
 /// Where locale data is looked for, in order of preference.
 const LOCALE_DIR_CANDIDATES: &[&str] = &["config/locales", "locales", "app/locales"];
@@ -127,60 +103,6 @@ pub struct Detected {
     pub gem_config: Option<PathBuf>,
     /// Everything a human should look at before trusting the file.
     pub notes: Vec<String>,
-}
-
-/// What the generated config read back.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Verification {
-    pub locales: Vec<String>,
-    pub key_count: usize,
-    pub files_read: usize,
-    /// Set when the generated config did not load. The file is still produced:
-    /// a config that needs one edit beats no config at all.
-    pub error: Option<String>,
-}
-
-#[derive(Debug, Clone)]
-pub struct Generated {
-    pub output: String,
-    pub detected: Detected,
-    pub verified: Verification,
-}
-
-impl Generated {
-    /// True when the generated config still needs a human.
-    pub fn needs_attention(&self) -> bool {
-        !self.detected.notes.is_empty() || self.detected.gem_config.is_some()
-    }
-}
-
-/// Detects, renders, and reads the result back. `to` is only used in messages.
-pub fn generate(root: &Path, to: &Path) -> Result<Generated, String> {
-    let mut detected = detect(root);
-    // The header reports what the settings read, so the file is rendered
-    // twice: once to have something to load, once with the answer in it.
-    let draft = render(&detected, None);
-    let verified = verify(&draft, root, to);
-    if let Some(err) = &verified.error {
-        // Whatever the reason, it is in the error, and guessing at a fix here
-        // would be wrong as often as right: a reference value in the data is
-        // not a `data.read` problem.
-        detected
-            .notes
-            .push(format!("the generated config did not load: {err}"));
-    } else if verified.key_count == 0 && detected.files_seen > 0 {
-        detected.notes.push(
-            "the generated config loaded no keys. Check that each locale file has its \
-             locale as the single top-level key."
-                .into(),
-        );
-    }
-    let output = render(&detected, Some(&verified));
-    Ok(Generated {
-        output,
-        detected,
-        verified,
-    })
 }
 
 /// Everything is read, nothing is executed.
@@ -629,257 +551,6 @@ fn preview(items: &[String]) -> String {
     }
 }
 
-/// Reads the generated config back and loads the data with it.
-fn verify(output: &str, root: &Path, to: &Path) -> Verification {
-    let empty = Verification {
-        locales: Vec::new(),
-        key_count: 0,
-        files_read: 0,
-        error: None,
-    };
-    let cfg = match Config::parse(output, to, root.to_path_buf()) {
-        Ok(cfg) => cfg,
-        Err(e) => {
-            return Verification {
-                error: Some(e),
-                ..empty
-            };
-        }
-    };
-    let store = match Store::load(&cfg) {
-        Ok(store) => store,
-        Err(e) => {
-            return Verification {
-                error: Some(e),
-                ..empty
-            };
-        }
-    };
-    let files: BTreeSet<&Path> = store
-        .trees
-        .values()
-        .flat_map(|t| t.file_locales.keys().map(PathBuf::as_path))
-        .collect();
-    Verification {
-        locales: store.locales.clone(),
-        key_count: forest_stats(&store, &store.locales).key_count,
-        files_read: files.len(),
-        error: None,
-    }
-}
-
-/// The generated file. `verified` is `None` for the draft that produces it.
-fn render(d: &Detected, verified: Option<&Verification>) -> String {
-    let mut out = String::new();
-    out.push_str("# i18n-tasks-rs configuration.\n#\n");
-    out.push_str("# Generated by `i18n-tasks-rs init-config` from the layout of this project.\n");
-    out.push_str(
-        "# This file is plain YAML. It is read, never evaluated: no ERB, no Ruby,\n\
-         # no scanner class names. An unknown key is an error.\n#\n",
-    );
-
-    out.push_str("# Detected:\n");
-    match &d.locale_dir {
-        Some(dir) => out.push_str(&format!(
-            "#   {dir}: {} locale file(s), {}\n",
-            d.files_seen,
-            if d.locales.is_empty() {
-                "no locale named by any of them".to_string()
-            } else {
-                format!("locales {}", d.locales.join(", "))
-            }
-        )),
-        None => out.push_str("#   no locale directory\n"),
-    }
-    match &d.base_locale_from {
-        Some(at) => out.push_str(&format!(
-            "#   base_locale {} from {at}\n",
-            d.base_locale, // the assignment the project already makes
-        )),
-        None => out.push_str(&format!(
-            "#   base_locale {}, assumed: the project's Ruby names no default_locale\n",
-            d.base_locale
-        )),
-    }
-    for root in &d.relative_roots_detected {
-        out.push_str(&format!(
-            "#   relative root {root}: not a default, but it uses relative keys\n"
-        ));
-    }
-    if let Some(v) = verified.filter(|v| v.error.is_none()) {
-        out.push_str(&format!(
-            "#   read back: {} key(s) in {} locale(s) from {} file(s)\n",
-            v.key_count,
-            v.locales.len(),
-            v.files_read
-        ));
-    }
-    if let Some(gem) = &d.gem_config {
-        out.push('#');
-        out.push('\n');
-        out.push_str(&wrap_comment(&format!(
-            "{} is still in the project. `i18n-tasks-rs migrate-config` converts it, and \
-             keeps the ignore lists, which this file has none of.",
-            gem.display().to_string().replace('\\', "/")
-        )));
-    }
-    if !d.notes.is_empty() {
-        out.push_str("#\n# NEEDS ATTENTION:\n");
-        for note in &d.notes {
-            out.push_str(&wrap_comment(note));
-        }
-    }
-
-    out.push_str(&format!("\nbase_locale: {}\n", d.base_locale));
-    if !d.locales.is_empty() {
-        out.push_str(&format!(
-            "# locales: [{}]\n\
-             # Detected, and left unset on purpose: with no list here the locales come\n\
-             # from the files `data.read` matches, so a new one needs no edit.\n",
-            d.locales.join(", ")
-        ));
-    }
-
-    out.push_str("\ndata:\n  read:\n");
-    for pattern in &d.read {
-        out.push_str(&format!("    - {}\n", quoted(pattern)));
-    }
-    out.push_str("  # Where a new key goes, and only under `normalize --write`.\n  write:\n");
-    out.push_str(&format!("    - {}\n", quoted(&d.write)));
-    out.push_str(
-        "  # router: conservative_router    # or pattern_router\n\
-         \x20 # keep_order: false\n\
-         \x20 # external: []                   # read-only data: never missing, never unused\n",
-    );
-
-    out.push_str("\nsearch:\n  paths:\n");
-    for path in &d.search_paths {
-        out.push_str(&format!("    - {path}\n"));
-    }
-    if !d.exclude.is_empty() {
-        out.push_str("  exclude:\n");
-        for path in &d.exclude {
-            out.push_str(&format!("    - {path}\n"));
-        }
-    } else {
-        out.push_str("  # exclude: []\n");
-    }
-    if d.relative_roots.is_empty() {
-        // Not omitted: leaving the key out would restore the gem's five
-        // defaults, none of which this project has.
-        out.push_str("  relative_roots: []   # no directory here uses relative keys\n");
-    } else {
-        out.push_str("  relative_roots:\n");
-        for root in &d.relative_roots {
-            out.push_str(&format!("    - {root}\n"));
-        }
-    }
-    out.push_str(
-        "  # only: []\n\
-         \x20 # relative_exclude_method_name_paths: []\n",
-    );
-
-    out.push_str(
-        "\n# Nothing is ignored yet. Each list takes key patterns — `devise.*`,\n\
-         # `{a,b}.*`, `a.*.b` — and `ignore` applies to every check at once.\n\
-         #\n\
-         # ignore: []\n\
-         # ignore_missing: []\n\
-         # ignore_unused: []\n\
-         # ignore_eq_base: []\n\
-         # ignore_inconsistent_interpolations: []\n",
-    );
-    out
-}
-
-/// A `data` path is quoted when YAML would read it as anything but a string.
-fn quoted(path: &str) -> String {
-    if path.starts_with([
-        '*', '&', '{', '[', '"', '\'', '%', '@', '`', '!', '|', '>', '#',
-    ]) || path.contains(": ")
-    {
-        format!("\"{}\"", path.replace('\\', "\\\\").replace('"', "\\\""))
-    } else {
-        path.to_string()
-    }
-}
-
-/// One note, wrapped into comment lines that stay inside 80 columns.
-fn wrap_comment(note: &str) -> String {
-    let mut out = String::new();
-    let mut line = String::from("#   ");
-    for word in note.split_whitespace() {
-        if line.len() + 1 + word.len() > 79 && line.len() > 4 {
-            out.push_str(line.trim_end());
-            out.push('\n');
-            line = String::from("#     ");
-        }
-        line.push_str(word);
-        line.push(' ');
-    }
-    out.push_str(line.trim_end());
-    out.push('\n');
-    out
-}
-
-/// The report for the terminal.
-pub fn to_text(g: &Generated, to: &Path, written: bool) -> String {
-    let d = &g.detected;
-    let mut s = String::new();
-    s.push_str(&format!(
-        "{} -> {}\n",
-        d.locale_dir.clone().unwrap_or_else(|| "(no data)".into()),
-        to.display()
-    ));
-    s.push_str(&format!(
-        "  data.read: {} pattern(s) covering {} locale file(s)\n",
-        d.read.len(),
-        d.files_seen
-    ));
-    s.push_str(&format!("  data.write: {}\n", d.write));
-    match &d.base_locale_from {
-        Some(at) => s.push_str(&format!("  base_locale: {} from {at}\n", d.base_locale)),
-        None => s.push_str(&format!("  base_locale: {}, assumed\n", d.base_locale)),
-    }
-    s.push_str(&format!("  search.paths: {}\n", d.search_paths.join(", ")));
-    s.push_str(&format!(
-        "  search.relative_roots: {}{}\n",
-        if d.relative_roots.is_empty() {
-            "none".into()
-        } else {
-            d.relative_roots.join(", ")
-        },
-        if d.relative_roots_detected.is_empty() {
-            String::new()
-        } else {
-            format!(" ({} detected)", d.relative_roots_detected.join(", "))
-        }
-    ));
-    if g.verified.error.is_none() {
-        s.push_str(&format!(
-            "  read back: {} key(s) in {} locale(s) from {} file(s)\n",
-            g.verified.key_count,
-            g.verified.locales.len(),
-            g.verified.files_read
-        ));
-    }
-    if let Some(gem) = &d.gem_config {
-        s.push_str(&format!(
-            "  NOTE {} exists. `migrate-config` converts it and keeps the ignore lists.\n",
-            gem.display()
-        ));
-    }
-    for note in &d.notes {
-        s.push_str(&format!("  NEEDS ATTENTION: {note}\n"));
-    }
-    if written {
-        s.push_str(&format!("  wrote {}\n", to.display()));
-    } else {
-        s.push_str("  nothing written. Pass `--write` to create the file.\n");
-    }
-    s
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1035,18 +706,18 @@ mod tests {
         assert_eq!(enclosing_root("a.rb"), None);
     }
 
-    /// Every generated path starts with the locale directory, so none of them
-    /// needs quoting. The rule is here for the one that would: a `data.read`
-    /// beginning with `*` is a YAML alias.
+    /// The note that lists unreadable files quotes a few of them and counts the
+    /// rest, because a project can have hundreds and the header is read by a
+    /// human.
     #[test]
-    fn a_path_is_quoted_only_when_yaml_needs_it() {
-        for plain in [
-            "config/locales/%{locale}.yml",
-            "config/locales/*.%{locale}.yml",
-            "config/locales/%{locale}/**/*.yml",
-        ] {
-            assert_eq!(quoted(plain), plain);
-        }
-        assert_eq!(quoted("*.%{locale}.yml"), "\"*.%{locale}.yml\"");
+    fn a_note_previews_three_items_and_counts_the_rest() {
+        let items: Vec<String> = ["a.yml", "b.yml", "c.yml", "d.yml", "e.yml"]
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect();
+        assert_eq!(preview(&items), "a.yml, b.yml, c.yml, and 2 more");
+        assert_eq!(preview(&items[..3]), "a.yml, b.yml, c.yml");
+        assert_eq!(preview(&items[..1]), "a.yml");
+        assert_eq!(preview(&[]), "");
     }
 }
