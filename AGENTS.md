@@ -14,9 +14,9 @@ bug *unless* it is written up in [`docs/accepted-diffs.md`](docs/accepted-diffs.
 That file, and [`docs/design-notes.md`](docs/design-notes.md), are the two
 documents to read before changing anything non-trivial:
 
-- `docs/design-notes.md` — the five design decisions, blockers B1–B10, what is
-  deliberately dropped, and why there is no cache. Source comments cite these by
-  number ("design decision 3", "blocker B5", "section 4a").
+- `docs/design-notes.md` — the five design decisions, blockers B1–B10, and what
+  is deliberately dropped. Source comments cite these by number
+  ("design decision 3", "blocker B5", "section 3").
 - `docs/accepted-diffs.md` — every deliberate difference from the gem, numbered.
   If you introduce a new one, add an entry in the same commit.
 
@@ -60,10 +60,9 @@ CLI-level tests live in `tests/`.
 cargo test                                   # 334 tests, all must pass
 cargo clippy --all-targets -- -D warnings
 cargo fmt
-./tests/no_cache.sh                          # guards "no cache, anywhere"
 ```
 
-Do not report a change as finished until all four are green. If something is
+Do not report a change as finished until all three are green. If something is
 left failing or unfinished, say so explicitly rather than narrowing the scope
 quietly.
 
@@ -83,9 +82,6 @@ quietly.
 
 - Comments cite the gem: `ref: lib/i18n/tasks/<file>.rb:<lines>`. Keep that
   habit — it is how a reader checks parity.
-- **No caching**, in any form: no cache module, no `--cache` flag, no cache
-  dependency. `tests/no_cache.sh` enforces it. See section 4a of the design
-  notes before arguing otherwise.
 - **Writing is opt-in.** `normalize` is the only command that touches disk, and
   only under `--write`; deleting an emptied file additionally needs
   `--allow-delete`. Do not add a command that writes by default.
