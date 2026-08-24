@@ -29,6 +29,7 @@ use super::{FileScan, Occurrence, ScanConfig, ruby};
 use crate::lineindex::LineIndex;
 use regex::bytes::Regex;
 use std::path::Path;
+use std::sync::Arc;
 use std::sync::LazyLock;
 
 /// The call, its first argument and an optional `scope:`, in one pass.
@@ -79,6 +80,8 @@ static LITERAL_RE: LazyLock<Regex> = LazyLock::new(|| {
 
 pub fn scan(bytes: &[u8], path: &Path, cfg: &ScanConfig) -> FileScan {
     let index = LineIndex::new(bytes);
+    // One allocation for the file, cloned into every occurrence it produces.
+    let shared: Arc<Path> = Arc::from(path);
     let ext = path
         .extension()
         .and_then(|e| e.to_str())
@@ -128,7 +131,7 @@ pub fn scan(bytes: &[u8], path: &Path, cfg: &ScanConfig) -> FileScan {
         }
         let (line_num, line_pos) = index.locate(call_pos);
         let occ = Occurrence {
-            path: path.to_path_buf(),
+            path: Arc::clone(&shared),
             snippet: String::from_utf8_lossy(index.line_text(bytes, call_pos)).into_owned(),
             pos: call_pos,
             line_pos,

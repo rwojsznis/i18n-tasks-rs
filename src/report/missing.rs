@@ -86,7 +86,7 @@ fn missing_used(cfg: &Config, store: &Store, used: &UsedKeys, locales: &[String]
                     key: key.clone(),
                     value: None,
                     reason: Some(Reason::Used {
-                        path: first.path.clone(),
+                        path: first.path.to_path_buf(),
                         line: first.line_num,
                     }),
                 });
