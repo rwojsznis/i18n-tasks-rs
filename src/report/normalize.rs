@@ -29,7 +29,15 @@ pub enum Action {
 
 #[derive(Debug, Serialize)]
 pub struct FileChange {
-    pub path: String,
+    /// The path as reports print it: relative to the root where it can be,
+    /// slashes normalised. Rendering only — never the target of a write.
+    #[serde(rename = "path")]
+    pub display: String,
+    /// The path `apply` writes, exactly as the router produced it. Kept apart
+    /// from `display` because that rendering is lossy and this is the only
+    /// code path in the tool that destroys data.
+    #[serde(skip)]
+    pub path: PathBuf,
     pub locale: String,
     pub action: Action,
     /// The bytes to write. Empty for a deletion.
@@ -68,7 +76,7 @@ impl NormalizeReport {
             self.changes.len()
         );
         for c in &self.changes {
-            out.push_str(&c.path);
+            out.push_str(&c.display);
             out.push('\n');
         }
         out.push_str("Run `i18n-tasks-rs normalize --write` to fix\n");
@@ -87,12 +95,12 @@ impl NormalizeReport {
                 Action::Update => "update",
                 Action::Delete => "delete",
             };
-            out.push_str(&format!("  {verb} {}\n", c.path));
+            out.push_str(&format!("  {verb} {}\n", c.display));
         }
         if diff {
             for c in &self.changes {
                 out.push('\n');
-                out.push_str(&unified_diff(&c.path, &c.before, &c.after));
+                out.push_str(&unified_diff(&c.display, &c.before, &c.after));
             }
         }
         out
@@ -159,7 +167,8 @@ pub fn plan(
                 continue;
             }
             changes.push(FileChange {
-                path: display_path(cfg, &dest.path),
+                display: display_path(cfg, &dest.path),
+                path: dest.path.clone(),
                 locale: locale.clone(),
                 action: if exists {
                     Action::Update
@@ -176,16 +185,19 @@ pub fn plan(
                 continue;
             }
             changes.push(FileChange {
-                path: display_path(cfg, &path),
+                display: display_path(cfg, &path),
                 locale: locale.clone(),
                 action: Action::Delete,
                 after: String::new(),
                 before: std::fs::read_to_string(&path).unwrap_or_default(),
+                path,
             });
         }
     }
 
-    changes.sort_by(|a, b| a.path.cmp(&b.path));
+    // On the printed path, so the report order does not depend on how a
+    // destination outside the root spells itself.
+    changes.sort_by(|a, b| a.display.cmp(&b.display));
     Ok(NormalizeReport {
         changes,
         files_routed,
@@ -217,7 +229,8 @@ fn check_foreign_locales(
 }
 
 /// Paths are reported relative to the config root, which is what the gem
-/// prints and what a diff reads best.
+/// prints and what a diff reads best. Lossy, and one-way: `apply` writes
+/// `FileChange.path`, never this.
 fn display_path(cfg: &Config, path: &Path) -> String {
     path.strip_prefix(&cfg.root)
         .unwrap_or(path)
@@ -226,18 +239,22 @@ fn display_path(cfg: &Config, path: &Path) -> String {
 }
 
 /// Applies the plan. Only the CLI calls this, and only after `--write`.
-pub fn apply(cfg: &Config, report: &NormalizeReport) -> Result<(), String> {
+///
+/// The planned `path` is written verbatim. It is deliberately not rebuilt from
+/// `display`, which cannot be reversed for a non-UTF-8 component or for a name
+/// holding a `\`.
+pub fn apply(report: &NormalizeReport) -> Result<(), String> {
     for change in &report.changes {
-        let path = cfg.root.join(&change.path);
+        let path = change.path.as_path();
         match change.action {
-            Action::Delete => std::fs::remove_file(&path)
+            Action::Delete => std::fs::remove_file(path)
                 .map_err(|e| format!("cannot delete {}: {e}", path.display()))?,
             _ => {
                 if let Some(dir) = path.parent() {
                     std::fs::create_dir_all(dir)
                         .map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
                 }
-                std::fs::write(&path, &change.after)
+                std::fs::write(path, &change.after)
                     .map_err(|e| format!("cannot write {}: {e}", path.display()))?;
             }
         }
