@@ -101,6 +101,19 @@ impl Leaf {
     }
 }
 
+// Sibling examinations made while recording each key's parent-child pairs.
+// H21: the pairs are deduplicated, and the deduplication must not scan the
+// siblings already recorded.
+#[cfg(test)]
+thread_local! {
+    static SIBLINGS_EXAMINED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn note_siblings_examined(n: usize) {
+    SIBLINGS_EXAMINED.with(|c| c.set(c.get() + n));
+}
+
 #[derive(Debug, Default)]
 pub struct LocaleTree {
     pub locale: String,
@@ -171,15 +184,29 @@ impl LocaleTree {
     fn finish(&mut self) {
         // One pass to record ancestors and immediate children. Doing this once
         // keeps `depluralize_key` constant time instead of a scan per key.
+        //
+        // `recorded` holds every node path whose parent-child pair is already
+        // in `children`, so a repeated ancestor costs one hash lookup instead
+        // of a scan over the siblings recorded before it — a parent with a few
+        // thousand children is an ordinary locale file, and the scan made this
+        // quadratic. It also ends the walk: a path that is already recorded had
+        // its whole ancestor chain recorded by the leaf that first reached it,
+        // so there is nothing above it left to do.
+        let mut recorded: HashSet<&str> = HashSet::new();
         for leaf in &self.leaves {
             let mut key = leaf.key.as_str();
             while let Some(parent) = crate::keys::parent_key(key) {
+                #[cfg(test)]
+                note_siblings_examined(1);
+                if !recorded.insert(key) {
+                    break;
+                }
                 self.interior.insert(parent.to_string());
                 let seg = &key[parent.len() + 1..];
-                let entry = self.children.entry(parent.to_string()).or_default();
-                if !entry.iter().any(|e| e == seg) {
-                    entry.push(seg.to_string());
-                }
+                self.children
+                    .entry(parent.to_string())
+                    .or_default()
+                    .push(seg.to_string());
                 key = parent;
             }
         }
@@ -624,6 +651,70 @@ fn fits_segment(path: &Path, is_last: bool) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn leaf(key: &str) -> Leaf {
+        Leaf {
+            key: key.to_string(),
+            value: Value::Str("v".into()),
+            depth: u16::try_from(key.split('.').count()).expect("shallow key"),
+            path: Arc::from(Path::new("config/locales/en.yml")),
+            odd_segments: None,
+        }
+    }
+
+    /// H21: recording a key's ancestors must not cost one comparison per
+    /// sibling already recorded. A few thousand keys under one parent is an
+    /// ordinary locale file, and a linear scan makes `finish` quadratic — and
+    /// `finish` runs inside `Store::load`, so every command pays it.
+    #[test]
+    fn recording_a_child_does_not_scan_the_children_before_it() {
+        const N: usize = 500;
+        let mut tree = LocaleTree::default();
+        for i in 0..N {
+            tree.insert(leaf(&format!("parent.key{i:04}")));
+        }
+        SIBLINGS_EXAMINED.with(|c| c.set(0));
+        tree.finish();
+        let examined = SIBLINGS_EXAMINED.with(std::cell::Cell::get);
+        // One examination per pair, plus one for `parent` under the root, so
+        // the floor is N + 1.
+        assert!(
+            examined < 4 * N,
+            "{examined} sibling comparisons for {N} keys; want O(N), not O(N^2)"
+        );
+    }
+
+    /// A leaf whose key is also an interior node is what ends the ancestor
+    /// walk early: the shorter key is recorded on the way up from the longer
+    /// one, whichever of the two comes first. Both directions must record the
+    /// same thing.
+    #[test]
+    fn a_key_that_is_also_an_interior_node_records_its_whole_chain() {
+        for order in [["a.b", "a.b.c"], ["a.b.c", "a.b"]] {
+            let mut tree = LocaleTree::default();
+            for key in order {
+                tree.insert(leaf(key));
+            }
+            tree.finish();
+            assert!(tree.is_interior("a"), "{order:?}");
+            assert!(tree.is_interior("a.b"), "{order:?}");
+            assert_eq!(tree.children("a"), ["b"], "{order:?}");
+            assert_eq!(tree.children("a.b"), ["c"], "{order:?}");
+        }
+    }
+
+    /// `children()` hands out the list in first-seen order, which the plural
+    /// rule and the emitter both read. Deduplication must not reorder it.
+    #[test]
+    fn children_stay_in_first_seen_order() {
+        let mut tree = LocaleTree::default();
+        for key in ["a.z.one", "a.b", "a.z.two", "a.c", "a.b"] {
+            tree.insert(leaf(key));
+        }
+        tree.finish();
+        assert_eq!(tree.children("a"), ["z", "b", "c"]);
+        assert_eq!(tree.children("a.z"), ["one", "two"]);
+    }
 
     #[test]
     fn value_to_display_string_matches_ruby_to_s() {
