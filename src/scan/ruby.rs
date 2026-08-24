@@ -152,12 +152,10 @@ impl<'a> Visitor<'a> {
         // Blocker B6: the gem hardcodes `app/views/` and `app/components/`.
         // Any configured relative root counts, and a `.rb` file never counts as
         // a template, which is what keeps `app/controllers/*.rb` out.
-        let root_supports_relative = root.is_some() && !is_rb;
-        let root_path: Vec<String> = if root_supports_relative {
-            template_path(&posix, root.unwrap())
-        } else {
-            Vec::new()
-        };
+        let relative_root = if is_rb { None } else { root };
+        let root_path: Vec<String> = relative_root
+            .map(|r| template_path(&posix, r))
+            .unwrap_or_default();
         Visitor {
             path,
             cfg,
@@ -166,7 +164,7 @@ impl<'a> Visitor<'a> {
             ranges: Vec::new(),
             root_path: root_path.into(),
             root_caps: Caps {
-                relative: root_supports_relative,
+                relative: relative_root.is_some(),
                 candidate: false,
             },
             append_method_name: !root.is_some_and(|r| cfg.skips_method_name(r)),
@@ -624,13 +622,10 @@ fn process_arguments(node: &pr::CallNode) -> (Vec<ArgVal>, Vec<(String, ArgVal)>
     let mut positional = Vec::new();
     let mut kwargs = Vec::new();
     for arg in arguments.arguments().iter() {
-        match &arg {
-            pr::Node::KeywordHashNode { .. } => {
-                if let Some(kw) = arg.as_keyword_hash_node() {
-                    kwargs = keyword_hash(&kw);
-                }
-            }
-            _ => positional.push(reduce(&arg)),
+        if let Some(kw) = arg.as_keyword_hash_node() {
+            kwargs = keyword_hash(&kw);
+        } else {
+            positional.push(reduce(&arg));
         }
     }
     (positional, kwargs)
@@ -652,49 +647,54 @@ fn keyword_hash(node: &pr::KeywordHashNode) -> Vec<(String, ArgVal)> {
     out
 }
 
+/// ref: arguments_visitor.rb — one `ArgVal` per node kind.
+///
+/// A chain rather than a `match`, because `pr::Node`'s variants carry no public
+/// fields: matching one proves the kind but not the value, which still has to
+/// come from the matching `as_*_node`. Each of those answers for exactly one
+/// kind, so the arms are disjoint and the order does not matter.
 fn reduce(node: &pr::Node) -> ArgVal {
-    match node {
-        pr::Node::StringNode { .. } => {
-            let n = node.as_string_node().unwrap();
-            ArgVal::Str(String::from_utf8_lossy(n.unescaped()).into_owned())
-        }
-        pr::Node::SymbolNode { .. } => {
-            let n = node.as_symbol_node().unwrap();
-            ArgVal::Str(String::from_utf8_lossy(n.unescaped()).into_owned())
-        }
-        pr::Node::IntegerNode { .. } => ArgVal::Int,
-        pr::Node::ArrayNode { .. } => {
-            let n = node.as_array_node().unwrap();
-            ArgVal::Arr(n.elements().iter().map(|e| reduce(&e)).collect())
-        }
-        // Shorthand `scope:` wraps the value in an ImplicitNode.
-        // ref: arguments_visitor.rb:38-40
-        pr::Node::ImplicitNode { .. } => {
-            let n = node.as_implicit_node().unwrap();
-            reduce(&n.value())
-        }
-        pr::Node::LocalVariableReadNode { .. }
-        | pr::Node::ConstantReadNode { .. }
-        | pr::Node::ConstantPathNode { .. }
-        | pr::Node::InstanceVariableReadNode { .. } => ArgVal::Unresolvable,
-        // Blocker B5: build a key pattern from the static parts.
-        pr::Node::InterpolatedStringNode { .. } => {
-            let n = node.as_interpolated_string_node().unwrap();
-            ArgVal::Pattern(interpolated_pattern(n.parts()))
-        }
-        pr::Node::InterpolatedSymbolNode { .. } => {
-            let n = node.as_interpolated_symbol_node().unwrap();
-            ArgVal::Pattern(interpolated_pattern(n.parts()))
-        }
-        // Unreachable: `process_arguments` takes the keyword hash before it
-        // reduces anything, and an `assoc` value is never a keyword hash. A
-        // braced `{a: 1}` is a `HashNode`, which falls through to `Nil`.
-        pr::Node::KeywordHashNode { .. } => {
-            let n = node.as_keyword_hash_node().unwrap();
-            ArgVal::Hash(keyword_hash(&n))
-        }
-        _ => ArgVal::Nil,
+    if let Some(n) = node.as_string_node() {
+        return ArgVal::Str(String::from_utf8_lossy(n.unescaped()).into_owned());
     }
+    if let Some(n) = node.as_symbol_node() {
+        return ArgVal::Str(String::from_utf8_lossy(n.unescaped()).into_owned());
+    }
+    if node.as_integer_node().is_some() {
+        return ArgVal::Int;
+    }
+    if let Some(n) = node.as_array_node() {
+        return ArgVal::Arr(n.elements().iter().map(|e| reduce(&e)).collect());
+    }
+    // Shorthand `scope:` wraps the value in an ImplicitNode.
+    // ref: arguments_visitor.rb:38-40
+    if let Some(n) = node.as_implicit_node() {
+        return reduce(&n.value());
+    }
+    // Blocker B5: build a key pattern from the static parts.
+    if let Some(n) = node.as_interpolated_string_node() {
+        return ArgVal::Pattern(interpolated_pattern(n.parts()));
+    }
+    if let Some(n) = node.as_interpolated_symbol_node() {
+        return ArgVal::Pattern(interpolated_pattern(n.parts()));
+    }
+    // Only ever an array element — `t([a: 1])`. `process_arguments` takes the
+    // call's own keyword hash before it reduces anything, and an `assoc` value
+    // is never a keyword hash. A braced `t({a: 1})` is a `HashNode`, which
+    // falls through to `Nil`.
+    if let Some(n) = node.as_keyword_hash_node() {
+        return ArgVal::Hash(keyword_hash(&n));
+    }
+    if matches!(
+        node,
+        pr::Node::LocalVariableReadNode { .. }
+            | pr::Node::ConstantReadNode { .. }
+            | pr::Node::ConstantPathNode { .. }
+            | pr::Node::InstanceVariableReadNode { .. }
+    ) {
+        return ArgVal::Unresolvable;
+    }
+    ArgVal::Nil
 }
 
 /// `t("foo.#{bar}.title")` becomes `foo.*:.title`.
@@ -704,17 +704,13 @@ fn reduce(node: &pr::Node) -> ArgVal {
 fn interpolated_pattern(parts: pr::NodeList) -> String {
     let mut out = String::new();
     for part in parts.iter() {
-        match &part {
-            pr::Node::StringNode { .. } => {
-                let n = part.as_string_node().unwrap();
-                out.push_str(&String::from_utf8_lossy(n.unescaped()));
-            }
-            pr::Node::InterpolatedStringNode { .. } => {
-                let n = part.as_interpolated_string_node().unwrap();
-                out.push_str(&interpolated_pattern(n.parts()));
-            }
+        if let Some(n) = part.as_string_node() {
+            out.push_str(&String::from_utf8_lossy(n.unescaped()));
+        } else if let Some(n) = part.as_interpolated_string_node() {
+            out.push_str(&interpolated_pattern(n.parts()));
+        } else {
             // Any `#{...}` becomes a single-segment wildcard.
-            _ => out.push_str("*:"),
+            out.push_str("*:");
         }
     }
     out
@@ -767,38 +763,32 @@ fn is_translation_name(name: &[u8]) -> bool {
 
 /// ref: visitor.rb#i18n_receiver? (lines 188-197)
 fn is_i18n_receiver(recv: &pr::Node) -> bool {
-    match recv {
-        pr::Node::ConstantReadNode { .. } => {
-            recv.as_constant_read_node().unwrap().name().as_slice() == b"I18n"
-        }
-        // `::I18n` — no parent, and the name is I18n.
-        pr::Node::ConstantPathNode { .. } => {
-            let n = recv.as_constant_path_node().unwrap();
-            n.parent().is_none() && n.name().map(|n| n.as_slice()) == Some(&b"I18n"[..])
-        }
-        _ => false,
+    if let Some(n) = recv.as_constant_read_node() {
+        return n.name().as_slice() == b"I18n";
     }
+    // `::I18n` — no parent, and the name is I18n.
+    if let Some(n) = recv.as_constant_path_node() {
+        return n.parent().is_none() && n.name().map(|n| n.as_slice()) == Some(&b"I18n"[..]);
+    }
+    false
 }
 
 /// The parts of a constant path, as `full_name_parts` returns them.
 fn constant_path_parts(node: &pr::Node) -> Vec<String> {
-    match node {
-        pr::Node::ConstantReadNode { .. } => {
-            vec![name_of(node.as_constant_read_node().unwrap().name())]
-        }
-        pr::Node::ConstantPathNode { .. } => {
-            let n = node.as_constant_path_node().unwrap();
-            let mut parts = n
-                .parent()
-                .map(|p| constant_path_parts(&p))
-                .unwrap_or_default();
-            if let Some(name) = n.name() {
-                parts.push(name_of(name));
-            }
-            parts
-        }
-        _ => Vec::new(),
+    if let Some(n) = node.as_constant_read_node() {
+        return vec![name_of(n.name())];
     }
+    if let Some(n) = node.as_constant_path_node() {
+        let mut parts = n
+            .parent()
+            .map(|p| constant_path_parts(&p))
+            .unwrap_or_default();
+        if let Some(name) = n.name() {
+            parts.push(name_of(name));
+        }
+        return parts;
+    }
+    Vec::new()
 }
 
 /// ref: visitor.rb#MAGIC_COMMENT_PREFIX = /\A.\s*i18n-tasks-use\s+/
@@ -1028,5 +1018,78 @@ mod tests {
     fn join_key_collapses_double_dots() {
         assert_eq!(join_key(&["a".into(), "b".into()]), "a.b");
         assert_eq!(join_key(&["a.".into(), "b".into()]), "a.b");
+    }
+
+    /// The last statement of `src` must be a call; `f` receives its arguments.
+    /// The closure is what keeps the parse result alive around them.
+    fn last_call_arguments<T>(src: &str, f: impl FnOnce(pr::ArgumentsNode) -> T) -> T {
+        let parsed = pr::parse(src.as_bytes());
+        let node = parsed.node();
+        let program = node.as_program_node().unwrap();
+        let statements = program.statements();
+        let last = statements.body().iter().last().unwrap();
+        let call = last.as_call_node().unwrap();
+        f(call.arguments().unwrap())
+    }
+
+    fn reduce_argument(src: &str) -> ArgVal {
+        last_call_arguments(src, |args| reduce(&args.arguments().iter().next().unwrap()))
+    }
+
+    /// `reduce` decides three observable outcomes at `record_call`: a key, a
+    /// pattern, or "not a key" — and "not a key" splits again into the silent
+    /// kinds (`Int`, `Arr`, `Hash`) and the reported ones (`Unresolvable`,
+    /// `Nil`). Each node kind must land on its own variant, so the mapping is
+    /// pinned here rather than only through the outcomes, which collapse it.
+    #[test]
+    fn reduce_maps_each_node_kind_to_its_own_argval() {
+        // Literals: the only two kinds that are a key.
+        assert_eq!(reduce_argument("t('a')"), ArgVal::Str("a".into()));
+        assert_eq!(reduce_argument("t(:a)"), ArgVal::Str("a".into()));
+        // Escapes come from `unescaped`, not from the source slice.
+        assert_eq!(reduce_argument(r#"t("a\nb")"#), ArgVal::Str("a\nb".into()));
+
+        // Silent: nothing is recorded, not even an opaque call.
+        assert_eq!(reduce_argument("t(1)"), ArgVal::Int);
+        assert_eq!(
+            reduce_argument("t([:a, 'b'])"),
+            ArgVal::Arr(vec![ArgVal::Str("a".into()), ArgVal::Str("b".into())])
+        );
+
+        // Blocker B5: an interpolation becomes a single-segment wildcard.
+        assert_eq!(
+            reduce_argument(r#"t("a.#{b}.c")"#),
+            ArgVal::Pattern("a.*:.c".into())
+        );
+        assert_eq!(
+            reduce_argument(r#"t(:"a.#{b}")"#),
+            ArgVal::Pattern("a.*:".into())
+        );
+
+        // Reported as opaque: a read the gem keeps the node for.
+        for src in ["x = 1\nt(x)", "t(X)", "t(X::Y)", "t(@x)"] {
+            assert_eq!(reduce_argument(src), ArgVal::Unresolvable, "{src}");
+        }
+
+        // Reported as opaque: everything the gem maps to `nil`.
+        for src in ["t(nil)", "t(build_key)", "t({a: 1})", "t(1..2)"] {
+            assert_eq!(reduce_argument(src), ArgVal::Nil, "{src}");
+        }
+
+        // `[a: 1]` is an array holding a keyword hash, which is the one way
+        // a `KeywordHashNode` reaches `reduce`: `process_arguments` takes the
+        // call's own keyword hash before it reduces anything.
+        assert_eq!(
+            reduce_argument("t([a: 1])"),
+            ArgVal::Arr(vec![ArgVal::Hash(vec![("a".to_string(), ArgVal::Int)])])
+        );
+
+        // Shorthand `scope:` wraps its value, so the wrapper must be seen
+        // through. ref: arguments_visitor.rb:38-40
+        let kwargs = last_call_arguments("scope = 1\nt('a', scope:)", |args| {
+            let hash = args.arguments().iter().last().unwrap();
+            keyword_hash(&hash.as_keyword_hash_node().unwrap())
+        });
+        assert_eq!(kwargs, vec![("scope".to_string(), ArgVal::Unresolvable)]);
     }
 }
