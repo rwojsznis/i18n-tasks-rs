@@ -21,6 +21,7 @@ use crate::lineindex::LineIndex;
 use ruby_prism as pr;
 use ruby_prism::Visit as _;
 use std::path::Path;
+use std::rc::Rc;
 
 /// ref: visitor.rb#MAGIC_COMMENT_PREFIX
 const MAGIC_COMMENT_MARKER: &str = "i18n-tasks-use";
@@ -65,45 +66,47 @@ fn scan_buffer(bytes: &[u8], path: &Path, cfg: &ScanConfig, loc: Locator) -> Fil
     v.out
 }
 
-/// A lexical scope. `path` is already resolved against the parent, so it needs
-/// no further walking.
-#[derive(Debug, Clone)]
-enum Scope {
-    /// ref: nodes.rb ParsedModule — never supports relative keys.
-    Module {
-        path: Vec<String>,
-    },
-    Class(ClassScope),
-    Method(MethodScope),
+/// What a `t` call inside a scope may do with a leading-dot key.
+#[derive(Debug, Clone, Copy)]
+struct Caps {
+    /// ref: nodes.rb#support_relative_keys?
+    relative: bool,
+    /// ref: nodes.rb#support_candidate_keys?
+    candidate: bool,
 }
 
-#[derive(Debug, Clone)]
-struct ClassScope {
-    path: Vec<String>,
-    view_component: bool,
-    /// Flipped by a bare `private`. ref: visitor.rb:95-96
-    private_now: bool,
-    /// ref: nodes.rb ParsedClass#support_relative_keys?
-    supports_relative: bool,
-    /// ref: nodes.rb ParsedClass#support_candidate_keys?
-    supports_candidate: bool,
-}
-
-#[derive(Debug, Clone)]
-struct MethodScope {
-    path: Vec<String>,
-    supports_relative: bool,
-    supports_candidate: bool,
-}
-
-impl Scope {
-    fn path(&self) -> &[String] {
-        match self {
-            Scope::Module { path } => path,
-            Scope::Class(c) => &c.path,
-            Scope::Method(m) => &m.path,
+impl Caps {
+    /// A scope that resolves no relative key at all: a module, a class body, or
+    /// anything reached through one.
+    fn none() -> Caps {
+        Caps {
+            relative: false,
+            candidate: false,
         }
     }
+}
+
+/// A lexical scope. `path` is already resolved against the parent, so it needs
+/// no further walking, and it is shared rather than copied because every `t`
+/// call inside the scope reads it.
+#[derive(Debug)]
+struct Scope {
+    kind: ScopeKind,
+    path: Rc<[String]>,
+    caps: Caps,
+}
+
+#[derive(Debug)]
+enum ScopeKind {
+    /// ref: nodes.rb ParsedModule — never supports relative keys, so its
+    /// `caps` are always `Caps::none()`.
+    Module,
+    Class {
+        view_component: bool,
+        /// Flipped by a bare `private`. ref: visitor.rb:95-96
+        private_now: bool,
+    },
+    Method,
 }
 
 /// Everything a `t` call needs from its enclosing scope.
@@ -112,9 +115,8 @@ impl Scope {
 /// parent to be a `ParsedMethod` or the `Root`.
 #[derive(Debug, Clone)]
 struct CallCtx {
-    path: Vec<String>,
-    supports_relative: bool,
-    supports_candidate: bool,
+    path: Rc<[String]>,
+    caps: Caps,
 }
 
 /// A scope's byte range, kept so a magic comment can be attached to the
@@ -132,9 +134,10 @@ struct Visitor<'a> {
     scopes: Vec<Scope>,
     ranges: Vec<ScopeRange>,
     /// ref: nodes.rb Root#path, for a template file under a relative root.
-    root_path: Vec<String>,
-    /// ref: nodes.rb Root#rails_view?
-    root_supports_relative: bool,
+    root_path: Rc<[String]>,
+    /// ref: nodes.rb Root#rails_view?, and Root#support_candidate_keys? which
+    /// is always false.
+    root_caps: Caps,
     /// ref: relative_keys.rb:26-28
     append_method_name: bool,
     view_component_file: bool,
@@ -150,7 +153,7 @@ impl<'a> Visitor<'a> {
         // Any configured relative root counts, and a `.rb` file never counts as
         // a template, which is what keeps `app/controllers/*.rb` out.
         let root_supports_relative = root.is_some() && !is_rb;
-        let root_path = if root_supports_relative {
+        let root_path: Vec<String> = if root_supports_relative {
             template_path(&posix, root.unwrap())
         } else {
             Vec::new()
@@ -161,8 +164,11 @@ impl<'a> Visitor<'a> {
             loc,
             scopes: Vec::new(),
             ranges: Vec::new(),
-            root_path,
-            root_supports_relative,
+            root_path: root_path.into(),
+            root_caps: Caps {
+                relative: root_supports_relative,
+                candidate: false,
+            },
             append_method_name: !root.is_some_and(|r| cfg.skips_method_name(r)),
             view_component_file: posix.contains("app/components/"),
             out: FileScan::default(),
@@ -171,34 +177,30 @@ impl<'a> Visitor<'a> {
 
     fn root_ctx(&self) -> CallCtx {
         CallCtx {
-            path: self.root_path.clone(),
-            supports_relative: self.root_supports_relative,
-            // ref: nodes.rb Root#support_candidate_keys? is always false.
-            supports_candidate: false,
+            path: Rc::clone(&self.root_path),
+            caps: self.root_caps,
         }
     }
 
     fn current_ctx(&self) -> CallCtx {
         match self.scopes.last() {
             None => self.root_ctx(),
-            Some(Scope::Method(m)) => CallCtx {
-                path: m.path.clone(),
-                supports_relative: m.supports_relative,
-                supports_candidate: m.supports_candidate,
-            },
-            // The parent is a class or a module, so relative keys never resolve.
             Some(s) => CallCtx {
-                path: s.path().to_vec(),
-                supports_relative: false,
-                supports_candidate: false,
+                path: Rc::clone(&s.path),
+                caps: match s.kind {
+                    ScopeKind::Method => s.caps,
+                    // The parent is a class or a module body, so a relative key
+                    // never resolves there whatever the scope itself supports.
+                    _ => Caps::none(),
+                },
             },
         }
     }
 
-    fn parent_path(&self) -> Vec<String> {
+    fn parent_path(&self) -> &[String] {
         match self.scopes.last() {
-            Some(s) => s.path().to_vec(),
-            None => self.root_path.clone(),
+            Some(s) => &s.path,
+            None => &self.root_path,
         }
     }
 
@@ -209,7 +211,7 @@ impl<'a> Visitor<'a> {
         self.scopes
             .iter()
             .rev()
-            .find(|s| !matches!(s, Scope::Method(_)))
+            .find(|s| !matches!(s.kind, ScopeKind::Method))
     }
 
     fn record_range(&mut self, start: usize, end: usize) {
@@ -369,10 +371,14 @@ impl<'a> Visitor<'a> {
 
 impl<'pr> pr::Visit<'pr> for Visitor<'_> {
     fn visit_module_node(&mut self, node: &pr::ModuleNode<'pr>) {
-        let mut path = self.parent_path();
+        let mut path = self.parent_path().to_vec();
         path.push(underscore(&name_of(node.name())));
         let loc = node.location();
-        self.scopes.push(Scope::Module { path });
+        self.scopes.push(Scope {
+            kind: ScopeKind::Module,
+            path: path.into(),
+            caps: Caps::none(),
+        });
         self.record_range(loc.start_offset(), loc.end_offset());
         pr::visit_module_node(self, node);
         self.scopes.pop();
@@ -397,22 +403,26 @@ impl<'pr> pr::Visit<'pr> for Visitor<'_> {
         {
             *last = stripped.to_string();
         }
-        let mut path = self.parent_path();
+        let mut path = self.parent_path().to_vec();
         path.extend(own);
 
         // Blocker B6: a class in a file under a configured relative root
         // supports relative keys too, not only controllers, mailers and
         // ViewComponents.
         let under_root = self.cfg.matching_root(self.path).is_some();
-        let scope = ClassScope {
-            path,
-            view_component,
-            private_now: false,
-            supports_relative: controller || mailer || view_component || under_root,
-            supports_candidate: controller,
+        let scope = Scope {
+            kind: ScopeKind::Class {
+                view_component,
+                private_now: false,
+            },
+            path: path.into(),
+            caps: Caps {
+                relative: controller || mailer || view_component || under_root,
+                candidate: controller,
+            },
         };
         let loc = node.location();
-        self.scopes.push(Scope::Class(scope));
+        self.scopes.push(scope);
         self.record_range(loc.start_offset(), loc.end_offset());
         pr::visit_class_node(self, node);
         self.scopes.pop();
@@ -420,50 +430,47 @@ impl<'pr> pr::Visit<'pr> for Visitor<'_> {
 
     fn visit_def_node(&mut self, node: &pr::DefNode<'pr>) {
         let name = name_of(node.name());
-        let (parent_path, parent_relative, parent_candidate, parent_view_component) =
+        // ref: visitor.rb:74-79 — privacy comes from the enclosing class.
+        let (parent_path, parent_caps, view_component, private_method) =
             match self.enclosing_definition() {
-                Some(Scope::Class(c)) => (
-                    c.path.clone(),
-                    c.supports_relative,
-                    c.supports_candidate,
-                    c.view_component,
-                ),
+                Some(Scope {
+                    kind:
+                        ScopeKind::Class {
+                            view_component,
+                            private_now,
+                        },
+                    path,
+                    caps,
+                }) => (Rc::clone(path), *caps, *view_component, *private_now),
+                // A module, whose `caps` are `Caps::none()` already.
                 // ref: nodes.rb ParsedModule#support_relative_keys? is false.
-                Some(Scope::Module { path }) => (path.clone(), false, false, false),
-                // Unreachable: `enclosing_definition` skips every method, so
-                // the parent of a `def` is a class, a module or the root. Kept
-                // for exhaustiveness, and it must stay consistent with the
-                // class arm if that ever changes.
-                Some(Scope::Method(m)) => (
-                    m.path.clone(),
-                    m.supports_relative,
-                    m.supports_candidate,
-                    false,
-                ),
-                None => (
-                    self.root_path.clone(),
-                    self.root_supports_relative,
-                    false,
-                    false,
-                ),
+                //
+                // The arm also covers a method, which `enclosing_definition`
+                // never returns: it skips every one of them, so the parent of a
+                // `def` is a class, a module or the root.
+                Some(s) => (Rc::clone(&s.path), s.caps, false, false),
+                None => (Rc::clone(&self.root_path), self.root_caps, false, false),
             };
         // ref: nodes.rb ParsedMethod#path — a ViewComponent collapses to the
         // class path, so the method name is not appended.
-        let mut path = parent_path;
-        if !parent_view_component && self.append_method_name {
-            path.push(name.clone());
-        }
-        // ref: visitor.rb:74-79 — privacy comes from the enclosing class.
-        let private_method =
-            matches!(self.enclosing_definition(), Some(Scope::Class(c)) if c.private_now);
-        let scope = MethodScope {
+        let path = if view_component || !self.append_method_name {
+            parent_path
+        } else {
+            let mut path = parent_path.to_vec();
+            path.push(name);
+            path.into()
+        };
+        let scope = Scope {
+            kind: ScopeKind::Method,
             path,
-            // ref: nodes.rb ParsedMethod#support_relative_keys?
-            supports_relative: !private_method && parent_relative,
-            supports_candidate: parent_candidate,
+            caps: Caps {
+                // ref: nodes.rb ParsedMethod#support_relative_keys?
+                relative: !private_method && parent_caps.relative,
+                candidate: parent_caps.candidate,
+            },
         };
         let loc = node.location();
-        self.scopes.push(Scope::Method(scope));
+        self.scopes.push(scope);
         self.record_range(loc.start_offset(), loc.end_offset());
         pr::visit_def_node(self, node);
         self.scopes.pop();
@@ -473,13 +480,16 @@ impl<'pr> pr::Visit<'pr> for Visitor<'_> {
         match node.name().as_slice() {
             // ref: visitor.rb:95-96
             b"private" => {
-                if let Some(Scope::Class(c)) = self
-                    .scopes
-                    .iter_mut()
-                    .rev()
-                    .find(|s| matches!(s, Scope::Class(_)))
+                if let Some(private_now) =
+                    self.scopes
+                        .iter_mut()
+                        .rev()
+                        .find_map(|s| match &mut s.kind {
+                            ScopeKind::Class { private_now, .. } => Some(private_now),
+                            _ => None,
+                        })
                 {
-                    c.private_now = true;
+                    *private_now = true;
                 }
             }
             name if is_translation_name(name) => {
@@ -513,12 +523,12 @@ fn full_key(
 ) -> Option<Vec<String>> {
     // ref: nodes.rb#relative_key?
     let relative = key.starts_with('.') && !receiver_present;
-    if relative && !ctx.supports_relative {
+    if relative && !ctx.caps.relative {
         return None;
     }
     let base: Vec<String> = scope.map(|s| vec![s.to_string()]).unwrap_or_default();
 
-    if relative && ctx.supports_candidate {
+    if relative && ctx.caps.candidate {
         // ref: nodes.rb:133-150 — progressively strip trailing path segments,
         // and never emit a bare unscoped key.
         let rel = &key[1..];
@@ -900,9 +910,11 @@ mod tests {
     #[test]
     fn a_candidate_context_with_no_path_resolves_to_nothing() {
         let ctx = CallCtx {
-            path: Vec::new(),
-            supports_relative: true,
-            supports_candidate: true,
+            path: Rc::from([]),
+            caps: Caps {
+                relative: true,
+                candidate: true,
+            },
         };
         assert_eq!(full_key(".rel", None, &ctx, false), None);
         // An absolute key still resolves, path or no path.
@@ -913,9 +925,11 @@ mod tests {
         // With a path, the candidates run from the most specific down, and
         // never as far as a bare key.
         let ctx = CallCtx {
-            path: vec!["events".into(), "create".into()],
-            supports_relative: true,
-            supports_candidate: true,
+            path: Rc::from(["events".to_string(), "create".to_string()]),
+            caps: Caps {
+                relative: true,
+                candidate: true,
+            },
         };
         assert_eq!(
             full_key(".rel", None, &ctx, false),
