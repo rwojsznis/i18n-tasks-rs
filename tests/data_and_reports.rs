@@ -1184,7 +1184,7 @@ fn missing_used_falls_back_to_the_key_itself() {
     let cfg = p.config(BASIC_CONFIG.replace("[en, es]", "[en]").as_str());
     let store = Store::load(&cfg).unwrap();
     let occ = |key: &str| Occurrence {
-        path: PathBuf::from("app/a.rb"),
+        path: std::sync::Arc::from(Path::new("app/a.rb")),
         snippet: format!("t('{key}')"),
         pos: 0,
         line_pos: 0,

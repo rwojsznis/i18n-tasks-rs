@@ -22,6 +22,7 @@ use ruby_prism as pr;
 use ruby_prism::Visit as _;
 use std::path::Path;
 use std::rc::Rc;
+use std::sync::Arc;
 
 /// ref: visitor.rb#MAGIC_COMMENT_PREFIX
 const MAGIC_COMMENT_MARKER: &str = "i18n-tasks-use";
@@ -134,7 +135,8 @@ struct ScopeRange {
 }
 
 struct Visitor<'a> {
-    path: &'a Path,
+    /// One allocation for the file, cloned into every occurrence it produces.
+    path: Arc<Path>,
     loc: Locator<'a>,
     scopes: Vec<Scope>,
     ranges: Vec<ScopeRange>,
@@ -154,7 +156,7 @@ struct Visitor<'a> {
 }
 
 impl<'a> Visitor<'a> {
-    fn new(path: &'a Path, cfg: &'a ScanConfig, loc: Locator<'a>) -> Visitor<'a> {
+    fn new(path: &Path, cfg: &ScanConfig, loc: Locator<'a>) -> Visitor<'a> {
         let posix = path.to_string_lossy().replace('\\', "/");
         // Case-sensitive on purpose: extension dispatch in `scan::scan_file` is
         // too, and the gem compares the literal suffix.
@@ -172,7 +174,7 @@ impl<'a> Visitor<'a> {
             .map(|r| template_path(&posix, r))
             .unwrap_or_default();
         Visitor {
-            path,
+            path: Arc::from(path),
             loc,
             scopes: Vec::new(),
             ranges: Vec::new(),
@@ -242,7 +244,7 @@ impl<'a> Visitor<'a> {
     ) -> Occurrence {
         let (pos, line_num, line_pos) = self.loc.locate(node_loc.start_offset());
         Occurrence {
-            path: self.path.to_path_buf(),
+            path: Arc::clone(&self.path),
             snippet: String::from_utf8_lossy(node_loc.as_slice()).into_owned(),
             pos,
             line_pos,
@@ -369,7 +371,7 @@ impl<'a> Visitor<'a> {
                 continue;
             };
             let occ = Occurrence {
-                path: self.path.to_path_buf(),
+                path: Arc::clone(&self.path),
                 snippet: text.to_string(),
                 pos,
                 line_pos,

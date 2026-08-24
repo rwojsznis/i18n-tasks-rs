@@ -4,14 +4,18 @@ pub mod template;
 
 use crate::lineindex::LineIndex;
 use serde::Serialize;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::sync::Arc;
 
 /// One place in the source where a key is used.
 ///
 /// ref: lib/i18n/tasks/scanners/results/occurrence.rb
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct Occurrence {
-    pub path: PathBuf,
+    /// The file the key was used in. Shared, not copied: one allocation per
+    /// file scan, as `data::load::Leaf` does for the same reason. Occurrences
+    /// are the higher-cardinality of the two.
+    pub path: Arc<Path>,
     /// The source slice of the call node, which is what the gem's Prism path
     /// stores in `Occurrence#line`.
     pub snippet: String,
@@ -235,5 +239,37 @@ mod tests {
     #[test]
     fn empty_source_map_is_the_identity() {
         assert_eq!(SourceMap::default().translate(42), 42);
+    }
+
+    /// The path belongs to the file, not to the occurrence: one scan of a file
+    /// holds one path allocation, however many keys the file uses. Asserted for
+    /// each of the three scanners, because each builds its own occurrences.
+    #[test]
+    fn a_file_scan_shares_one_path_between_its_occurrences() {
+        let cfg = ScanConfig {
+            relative_roots: vec!["app/views".to_string()],
+            relative_exclude_method_name_paths: Vec::new(),
+        };
+        let cases = [
+            ("app/models/book.rb", "t('a.one')\nI18n.t('a.two')\n"),
+            (
+                "app/views/books/show.html.erb",
+                "<%= t('.one') %>\n<%= t('b.two') %>\n",
+            ),
+            (
+                "app/views/books/edit.html.slim",
+                "= t('.one')\n= t('c.two')\n",
+            ),
+        ];
+        for (rel, src) in cases {
+            let path = Path::new(rel);
+            let scan = scan_file(src.as_bytes(), path, &cfg);
+            let paths: Vec<&Arc<Path>> = scan.keys.iter().map(|(_, occ)| &occ.path).collect();
+            assert_eq!(paths.len(), 2, "{rel} found {:?}", scan.keys);
+            for p in &paths {
+                assert_eq!(p.as_ref(), path, "{rel}");
+                assert!(Arc::ptr_eq(paths[0], p), "{rel} copied its path");
+            }
+        }
     }
 }
