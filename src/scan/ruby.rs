@@ -470,9 +470,9 @@ impl<'pr> pr::Visit<'pr> for Visitor<'_> {
     }
 
     fn visit_call_node(&mut self, node: &pr::CallNode<'pr>) {
-        match name_of(node.name()).as_str() {
+        match node.name().as_slice() {
             // ref: visitor.rb:95-96
-            "private" => {
+            b"private" => {
                 if let Some(Scope::Class(c)) = self
                     .scopes
                     .iter_mut()
@@ -482,7 +482,7 @@ impl<'pr> pr::Visit<'pr> for Visitor<'_> {
                     c.private_now = true;
                 }
             }
-            "t" | "t!" | "translate" | "translate!" => {
+            name if is_translation_name(name) => {
                 let ctx = self.current_ctx();
                 self.handle_translation_call(node, &ctx);
                 // ref: visitor.rb:99 — a non-I18n receiver returns before
@@ -747,16 +747,24 @@ fn name_of(id: pr::ConstantId) -> String {
     String::from_utf8_lossy(id.as_slice()).into_owned()
 }
 
+/// ref: visitor.rb:98 — the `t`-family method names.
+///
+/// The name is compared as raw bytes because every call node in the file
+/// reaches this test, and a `String` per node buys nothing.
+fn is_translation_name(name: &[u8]) -> bool {
+    matches!(name, b"t" | b"t!" | b"translate" | b"translate!")
+}
+
 /// ref: visitor.rb#i18n_receiver? (lines 188-197)
 fn is_i18n_receiver(recv: &pr::Node) -> bool {
     match recv {
         pr::Node::ConstantReadNode { .. } => {
-            name_of(recv.as_constant_read_node().unwrap().name()) == "I18n"
+            recv.as_constant_read_node().unwrap().name().as_slice() == b"I18n"
         }
         // `::I18n` — no parent, and the name is I18n.
         pr::Node::ConstantPathNode { .. } => {
             let n = recv.as_constant_path_node().unwrap();
-            n.parent().is_none() && n.name().map(name_of).as_deref() == Some("I18n")
+            n.parent().is_none() && n.name().map(|n| n.as_slice()) == Some(&b"I18n"[..])
         }
         _ => false,
     }
@@ -847,10 +855,7 @@ fn collect_translation_calls(node: &pr::Node) -> Vec<ExtractedCall> {
     }
     impl<'pr> pr::Visit<'pr> for Collector {
         fn visit_call_node(&mut self, node: &pr::CallNode<'pr>) {
-            if matches!(
-                name_of(node.name()).as_str(),
-                "t" | "t!" | "translate" | "translate!"
-            ) {
+            if is_translation_name(node.name().as_slice()) {
                 let (args, kwargs) = process_arguments(node);
                 let receiver = node.receiver();
                 self.found.push(ExtractedCall {
@@ -973,6 +978,36 @@ mod tests {
         assert!(is_all_wildcard("*:.*:"));
         assert!(is_all_wildcard(".*:."));
         assert!(!is_all_wildcard("hash.*:"));
+    }
+
+    /// ref: visitor.rb:98 — the `t`-family names, and nothing else.
+    ///
+    /// The name is compared as bytes, so the near misses are what matter: a
+    /// name that only shares a prefix, and one that only differs in case,
+    /// must both stay out.
+    #[test]
+    fn only_the_t_family_names_are_translation_calls() {
+        for name in [&b"t"[..], b"t!", b"translate", b"translate!"] {
+            assert!(
+                is_translation_name(name),
+                "{} should be a translation call",
+                String::from_utf8_lossy(name)
+            );
+        }
+        for name in [
+            &b"tt"[..],
+            b"T",
+            b"Translate",
+            b"translate?",
+            b"",
+            b"private",
+        ] {
+            assert!(
+                !is_translation_name(name),
+                "{} should not be a translation call",
+                String::from_utf8_lossy(name)
+            );
+        }
     }
 
     #[test]
