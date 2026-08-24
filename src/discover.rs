@@ -5,7 +5,6 @@
 use crate::config::{ALWAYS_EXCLUDE, Config};
 use aho_corasick::AhoCorasick;
 use globset::{Glob, GlobSet, GlobSetBuilder};
-use rayon::prelude::*;
 use std::path::{Path, PathBuf};
 
 /// Substrings that any `t`-family call or magic comment must contain.
@@ -13,10 +12,43 @@ use std::path::{Path, PathBuf};
 /// A file with no hit cannot hold a translation call, so it is never parsed.
 const NEEDLES: &[&str] = &["t(", "t ", "t!", "translate", "I18n.", "i18n-tasks-use"];
 
-pub struct Discovery {
-    pub files: Vec<PathBuf>,
-    /// Files that matched the globs but held none of the needles.
-    pub prefiltered: usize,
+/// Reads one source file, or `None` when it cannot be read.
+///
+/// The single place a scanned file is read. The prefilter and the parse share
+/// these bytes, so a candidate costs one `read` syscall and one copy.
+pub fn read_source(path: &Path) -> Option<Vec<u8>> {
+    #[cfg(test)]
+    read_log::record(path);
+    std::fs::read(path).ok()
+}
+
+/// Every `read_source` call, so a test can assert one read per file.
+///
+/// The unit tests share one process and one rayon pool, so the log is global,
+/// is never cleared, and a test counts only the paths under its own temp root.
+#[cfg(test)]
+pub mod read_log {
+    use std::path::{Path, PathBuf};
+    use std::sync::{Mutex, OnceLock};
+
+    fn log() -> &'static Mutex<Vec<PathBuf>> {
+        static LOG: OnceLock<Mutex<Vec<PathBuf>>> = OnceLock::new();
+        LOG.get_or_init(|| Mutex::new(Vec::new()))
+    }
+
+    pub fn record(path: &Path) {
+        log().lock().expect("read log").push(path.to_path_buf());
+    }
+
+    /// How many reads have happened under `root`, over the whole process.
+    pub fn count_under(root: &Path) -> usize {
+        log()
+            .lock()
+            .expect("read log")
+            .iter()
+            .filter(|p| p.starts_with(root))
+            .count()
+    }
 }
 
 pub struct Finder {
@@ -50,7 +82,12 @@ impl Finder {
         })
     }
 
-    pub fn discover(&self) -> Discovery {
+    /// The candidate files, in sorted order: everything the globs admit.
+    ///
+    /// The needle prefilter is *not* applied here. It needs the file's bytes,
+    /// and so does the scan, so both read once in `UsedKeys::scan` and ask
+    /// `prefilter_matches` there.
+    pub fn discover(&self) -> Vec<PathBuf> {
         let mut files = Vec::new();
         for root in &self.paths {
             if !root.exists() {
@@ -66,30 +103,13 @@ impl Finder {
         }
         files.sort();
         files.dedup();
-        // Reading every candidate once here also warms the OS page cache for
-        // the scan that follows. The reads are fanned out too, because they are
-        // the larger half of the scan path once the parse is parallel.
-        //
-        // `Some(false)` is a file with no needle in it, `None` is a file that
-        // could not be read; only the first is reported. Collecting a verdict
-        // per file, in file order, keeps the surviving list identical at every
-        // `--jobs` setting.
-        let verdicts: Vec<Option<bool>> = files
-            .par_iter()
-            .map(|p| {
-                std::fs::read(p)
-                    .ok()
-                    .map(|bytes| self.prefilter.is_match(&bytes[..]))
-            })
-            .collect();
-        let prefiltered = verdicts.iter().filter(|v| **v == Some(false)).count();
-        let files = files
-            .into_iter()
-            .zip(&verdicts)
-            .filter(|(_, v)| **v == Some(true))
-            .map(|(p, _)| p)
-            .collect();
-        Discovery { files, prefiltered }
+        files
+    }
+
+    /// True when the file's bytes hold a needle, so it may hold a translation
+    /// call and has to be parsed.
+    pub fn prefilter_matches(&self, bytes: &[u8]) -> bool {
+        self.prefilter.is_match(bytes)
     }
 
     fn walk(&self, dir: &Path, out: &mut Vec<PathBuf>) {
@@ -216,7 +236,6 @@ mod tests {
         let mut out: Vec<String> = Finder::new(&cfg)
             .expect("globs compile")
             .discover()
-            .files
             .iter()
             .map(|p| {
                 p.strip_prefix(root)
@@ -391,16 +410,23 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    /// The prefilter drops a file with no translation call in it, and counts it.
+    /// The prefilter is a question about a file's bytes, so `discover` returns
+    /// a file with no translation call in it and the scan pass drops it.
+    ///
+    /// `UsedKeys::scan` is what counts the drop; see
+    /// `a_candidate_file_is_read_once` in `src/used.rs` and
+    /// `the_prefilter_skips_files_with_no_translation_call` in
+    /// `tests/data_and_reports.rs`.
     #[test]
-    fn the_prefilter_counts_what_it_skipped() {
+    fn the_prefilter_reads_the_bytes_not_the_path() {
         let root = project("prefilter");
         std::fs::write(root.join("plain.rb"), "puts 1\n").unwrap();
         let body = "search:\n  paths: [.]\n";
         let cfg = Config::parse(body, &root.join("i18n-tasks.yml"), root.clone()).unwrap();
-        let d = Finder::new(&cfg).unwrap().discover();
-        assert_eq!(d.prefiltered, 1);
-        assert!(!d.files.iter().any(|p| p.ends_with("plain.rb")));
+        let finder = Finder::new(&cfg).unwrap();
+        assert!(finder.discover().iter().any(|p| p.ends_with("plain.rb")));
+        assert!(!finder.prefilter_matches(b"puts 1\n"));
+        assert!(finder.prefilter_matches(b"t('key')\n"));
         let _ = std::fs::remove_dir_all(&root);
     }
 }

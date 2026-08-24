@@ -8,7 +8,7 @@
 //! (`used_keys.rb:143`), a further 22%.
 
 use crate::config::Config;
-use crate::discover::Finder;
+use crate::discover::{Finder, read_source};
 use crate::pattern::PatternSet;
 use crate::scan::{FileScan, Occurrence, ScanConfig, scan_file};
 use rayon::prelude::*;
@@ -25,6 +25,19 @@ pub struct UsedKeys {
     pub opaque: Vec<Occurrence>,
     pub files_scanned: usize,
     pub files_prefiltered: usize,
+}
+
+/// What one candidate file turned out to be.
+///
+/// Collected in file order, so the counts and the merge order do not depend on
+/// how the work was spread over the pool.
+enum Verdict {
+    Scanned(FileScan),
+    /// Held none of the needles, so it cannot hold a translation call.
+    Prefiltered,
+    /// Could not be read. Counted as neither scanned nor prefiltered, which is
+    /// what the two-pass version did with it.
+    Unreadable,
 }
 
 impl UsedKeys {
@@ -48,36 +61,50 @@ impl UsedKeys {
 
     pub fn scan(cfg: &Config) -> Result<UsedKeys, String> {
         let finder = Finder::new(cfg)?;
-        let found = finder.discover();
+        let candidates = finder.discover();
         let scan_cfg = ScanConfig::from_config(cfg);
         // One task per file, on whichever thread pool the caller
         // installed. `scan_file` is a pure function of the bytes and the path,
         // so nothing is shared and nothing needs a lock.
         //
+        // The needle prefilter runs here rather than in `discover`, so that a
+        // candidate is read once and the same bytes answer both questions.
+        //
         // `collect` into a `Vec` keeps the results in file order, which is what
         // makes `--jobs N` byte-identical to `--jobs 1`: the sorts in
         // `from_scan` are stable, so two occurrences that share a path and a
         // position must still arrive in the same order.
-        let per_file: Vec<FileScan> = found
-            .files
+        let per_file: Vec<Verdict> = candidates
             .par_iter()
             .map(|path| {
-                let Ok(bytes) = std::fs::read(path) else {
-                    return FileScan::default();
+                let Some(bytes) = read_source(path) else {
+                    return Verdict::Unreadable;
                 };
+                if !finder.prefilter_matches(&bytes) {
+                    return Verdict::Prefiltered;
+                }
                 // Paths are reported relative to the config root, as the gem does.
                 let rel = path.strip_prefix(&cfg.root).unwrap_or(path);
-                scan_file(&bytes, rel, &scan_cfg)
+                Verdict::Scanned(scan_file(&bytes, rel, &scan_cfg))
             })
             .collect();
         let mut merged = FileScan::default();
-        for scan in per_file {
-            merged.merge(scan);
+        let mut files_scanned = 0;
+        let mut files_prefiltered = 0;
+        for verdict in per_file {
+            match verdict {
+                Verdict::Scanned(scan) => {
+                    files_scanned += 1;
+                    merged.merge(scan);
+                }
+                Verdict::Prefiltered => files_prefiltered += 1,
+                Verdict::Unreadable => {}
+            }
         }
         Ok(UsedKeys::from_scan(
             merged,
-            found.files.len(),
-            found.prefiltered,
+            files_scanned,
+            files_prefiltered,
         ))
     }
 
@@ -129,6 +156,34 @@ mod tests {
             files_scanned: 0,
             files_prefiltered: 0,
         }
+    }
+
+    /// Each candidate file is read once.
+    ///
+    /// The prefilter used to read every candidate itself and the scan then read
+    /// the survivors again, so a file holding a translation call cost two
+    /// syscalls and two copies of its bytes.
+    #[test]
+    fn a_candidate_file_is_read_once() {
+        let root = std::env::temp_dir().join("i18n-tasks-rs-used-one-read");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("app")).unwrap();
+        std::fs::write(root.join("app/loud.rb"), "t('a.b')\n").unwrap();
+        std::fs::write(root.join("app/quiet.rb"), "1 + 1\n").unwrap();
+        let body = "search:\n  paths: [app]\n";
+        let cfg = Config::parse(body, &root.join("i18n-tasks-rs.yml"), root.clone()).unwrap();
+
+        let used = UsedKeys::scan(&cfg).unwrap();
+
+        assert_eq!(used.files_scanned, 1, "loud.rb");
+        assert_eq!(used.files_prefiltered, 1, "quiet.rb");
+        assert!(used.key_used("a.b"));
+        assert_eq!(
+            crate::discover::read_log::count_under(&root),
+            2,
+            "one read per candidate, not one per pass"
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// `key_used` is a question about `keys`, so a `UsedKeys` built by hand —
