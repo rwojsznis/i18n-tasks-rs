@@ -50,7 +50,12 @@ fn install_pool(jobs: Option<usize>) -> Result<(), String> {
     builder
         .stack_size(8 * 1024 * 1024)
         .build_global()
-        .map_err(|e| format!("cannot start {} worker threads: {e}", jobs.unwrap_or(0)))
+        .map_err(|e| match jobs {
+            Some(n) => format!("cannot start {n} worker threads: {e}"),
+            // Without `--jobs` the count is rayon's, not ours, so name no
+            // number rather than a made-up one.
+            None => format!("cannot start the worker thread pool: {e}"),
+        })
 }
 
 #[derive(clap::Args, Clone, Debug)]
@@ -728,4 +733,27 @@ fn find_output(session: &Session, used: &UsedKeys) -> Result<u8, String> {
         }
     }
     Ok(EXIT_OK)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::install_pool;
+
+    /// The second `build_global` in a process always fails, which is the only
+    /// way to reach the error arm without a resource limit. Keep this the only
+    /// test in this binary: it installs a process-global pool.
+    #[test]
+    fn pool_error_does_not_invent_a_thread_count() {
+        install_pool(Some(2)).expect("first install builds the global pool");
+        let err = install_pool(None).expect_err("second install must fail");
+        assert!(
+            !err.contains('0'),
+            "no --jobs, so the message must not name a thread count: {err}"
+        );
+        let err = install_pool(Some(4)).expect_err("second install must fail");
+        assert!(
+            err.contains("4 worker threads"),
+            "with --jobs the message names the asked-for count: {err}"
+        );
+    }
 }
