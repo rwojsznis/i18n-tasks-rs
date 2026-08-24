@@ -103,11 +103,13 @@ struct Seg {
 impl SourceMap {
     /// Records that `len` bytes at `buf_start` in the buffer are a verbatim copy
     /// of the file bytes at `file_start`. Segments must be pushed in order.
+    /// The offsets are packed as `u32`, as in `LineIndex`: no template this
+    /// scans is 4 GiB, and a longer one saturates rather than wrapping.
     pub fn push(&mut self, buf_start: usize, len: usize, file_start: usize) {
         self.segs.push(Seg {
-            buf_start: buf_start as u32,
-            len: len as u32,
-            file_start: file_start as u32,
+            buf_start: u32::try_from(buf_start).unwrap_or(u32::MAX),
+            len: u32::try_from(len).unwrap_or(u32::MAX),
+            file_start: u32::try_from(file_start).unwrap_or(u32::MAX),
         });
     }
 
@@ -118,7 +120,7 @@ impl SourceMap {
         if self.segs.is_empty() {
             return buf_pos;
         }
-        let pos = buf_pos as u32;
+        let pos = u32::try_from(buf_pos).unwrap_or(u32::MAX);
         let i = self.segs.partition_point(|s| s.buf_start <= pos);
         if i == 0 {
             return self.segs[0].file_start as usize;
@@ -136,6 +138,7 @@ impl SourceMap {
 
 /// Turns a parser offset into the file position, line and column an
 /// `Occurrence` reports.
+#[derive(Debug)]
 pub struct Locator<'a> {
     index: &'a LineIndex,
     map: Option<&'a SourceMap>,

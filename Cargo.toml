@@ -10,11 +10,8 @@ categories = ["command-line-utilities", "development-tools"]
 
 [dependencies]
 aho-corasick = "1.1.5"
-anyhow = "1.0.104"
 clap = { version = "4.6.6", features = ["derive"] }
-fancy-regex = "0.19.0"
 globset = "0.4.20"
-ignore = "0.4.33"
 rayon = "1.12.0"
 regex = "1.13.1"
 ruby-prism = "1.9.0"
@@ -22,7 +19,6 @@ saphyr-parser = "0.0.12"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 similar = { version = "3.2.0", features = ["text"] }
-smallvec = "1.15.2"
 
 [lib]
 name = "i18n_tasks_rs"
@@ -35,3 +31,31 @@ path = "src/main.rs"
 [profile.release]
 lto = true
 codegen-units = 1
+
+# Kept in the manifest rather than in the CI command line, so a local `cargo
+# clippy` says the same thing CI does. The three panic-family restriction lints
+# live in `src/lib.rs` and `src/main.rs` instead, because they are about the
+# shipped code and the tests are full of `unwrap`.
+[lints.rust]
+unsafe_code = "forbid"
+missing_debug_implementations = "warn"
+unreachable_pub = "warn"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+# Cosmetic, and each one loses an argument with this codebase's style.
+doc_markdown = "allow"        # the gem's names are not Rust items
+must_use_candidate = "allow"  # nothing here is a builder
+# `write!` into a `String` cannot fail, so the alternative is an `unwrap` the
+# lint below would then complain about. The reports are built by pushing.
+format_push_string = "allow"
+# clap needs one `bool` per flag, and every field is read by name.
+struct_excessive_bools = "allow"
+# A `match` on an enum stays a `match`: at all six sites the other arm is a
+# block of several statements, and the suggested `if let ... else` is longer.
+single_match_else = "allow"
+# `init::detect`, `init::render` and `Config::parse` are long because each one
+# is a single list of cases. Splitting them would only move the list.
+too_many_lines = "allow"
+# Given blocker B3 and the write path.
+cast_possible_truncation = "warn"

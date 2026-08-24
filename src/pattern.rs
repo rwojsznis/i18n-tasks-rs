@@ -166,7 +166,7 @@ impl Pattern {
                 self.run(pc + 1, s, end, caps, memo)
             }
             Inst::Split(targets) => {
-                for &t in targets.iter() {
+                for &t in targets {
                     if self.run(t, s, pos, caps, memo) {
                         return true;
                     }
@@ -348,7 +348,11 @@ fn tokenize(src: &str, next_group: &mut usize) -> Vec<Tok> {
                 i += 1;
             }
             _ => {
-                let ch = src[i..].chars().next().unwrap();
+                // See `config::interpolate_locale`: the `else` arm restates
+                // the loop condition.
+                let Some(ch) = src[i..].chars().next() else {
+                    break;
+                };
                 lit.push(ch);
                 i += ch.len_utf8();
             }
@@ -396,6 +400,15 @@ mod tests {
 
     fn m(pat: &str, key: &str) -> bool {
         Pattern::compile(pat).is_match(key)
+    }
+
+    /// See `config::interpolate_locale`: `tokenize` is the fifth byte-scan
+    /// loop, and a literal it cuts in half matches nothing.
+    #[test]
+    fn a_multi_byte_literal_matches_itself() {
+        assert!(m("übersetzung.*", "übersetzung.some.key"));
+        assert!(!m("übersetzung.*", "ubersetzung.some.key"));
+        assert!(m("*.日本語", "a.日本語"));
     }
 
     // Full port of spec/key_pattern_matching_spec.rb

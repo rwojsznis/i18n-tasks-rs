@@ -5,6 +5,11 @@
 //! (`lib/i18n/tasks/scanners/occurrence_from_position.rb:20`), which is
 //! quadratic in the number of occurrences. One index per file replaces it.
 
+/// Line starts, packed as `u32`: two bytes per line beats eight, and no
+/// source file this scans is 4 GiB. A longer buffer saturates rather than
+/// wraps, so the offsets stay ordered and `locate` keeps answering the last
+/// line instead of some arbitrary earlier one.
+#[derive(Debug)]
 pub struct LineIndex {
     /// Byte offset of the first character of each line. Always starts with 0.
     starts: Vec<u32>,
@@ -16,7 +21,7 @@ impl LineIndex {
         starts.push(0u32);
         for (i, &b) in bytes.iter().enumerate() {
             if b == b'\n' {
-                starts.push((i + 1) as u32);
+                starts.push(u32::try_from(i + 1).unwrap_or(u32::MAX));
             }
         }
         LineIndex { starts }
@@ -24,7 +29,7 @@ impl LineIndex {
 
     /// One-based line number and zero-based column for a byte offset.
     pub fn locate(&self, offset: usize) -> (usize, usize) {
-        let off = offset as u32;
+        let off = u32::try_from(offset).unwrap_or(u32::MAX);
         let line = match self.starts.binary_search(&off) {
             Ok(i) => i,
             Err(i) => i - 1,

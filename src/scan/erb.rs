@@ -25,6 +25,10 @@ use std::path::Path;
 use std::sync::LazyLock;
 
 /// ref: erb_ast_scanner.rb:13 `DEFAULT_REGEXP`
+#[allow(
+    clippy::expect_used,
+    reason = "a static pattern that fails to compile is a bug here, not a run-time condition"
+)]
 static TAG_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?s)<%(={1,2}|-|#-?|%)?(.*?)([-=])?%>").expect("static pattern compiles")
 });
@@ -57,7 +61,7 @@ fn build_buffer(bytes: &[u8]) -> (Vec<u8>, SourceMap) {
         }
         match indicator {
             // ref: erb_ast_scanner.rb:94 — `"="`, `nil` and `"-"` are code.
-            None | Some(b'=') | Some(b'-') => {
+            None | Some(b'=' | b'-') => {
                 map.push(buf.len(), code.len(), code.start());
                 buf.extend_from_slice(code.as_bytes());
                 buf.push(b'\n');

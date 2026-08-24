@@ -296,6 +296,16 @@ Not behaviour differences, and not visible in the output.
   ViewComponent detection behind `search.prism: "rails"`. Rails inference is
   dropped anyway (section 3, and accepted diffs 4 and 4a), and the flag is not
   part of the new config format.
+- **The lint settings live in the manifest.** `Cargo.toml` holds `[lints.rust]`
+  and `[lints.clippy]`, so a local `cargo clippy` says what CI says; CI passes
+  only `-D warnings`. `pedantic` is on, with six lints allowed and a reason
+  written beside each. `clippy::unwrap_used`, `clippy::expect_used` and
+  `clippy::panic` are the exception: they are declared in `src/lib.rs` and
+  `src/main.rs`, because a manifest `[lints]` table also covers `tests/`, where
+  a panic *is* the failure report. `clippy.toml` exempts the unit tests inside
+  `src/`. Four dependencies were declared and never imported (`anyhow`,
+  `fancy-regex`, `ignore`, `smallvec`); `cargo machete` runs in CI so that
+  cannot come back.
 - **`rayon` changed no behaviour**, which is the point of design decision 4.
   Every differential report is byte-identical to its single-threaded version,
   and `tests/jobs.rs` holds the output identical at every `--jobs` setting.

@@ -147,6 +147,12 @@ struct Visitor<'a> {
 impl<'a> Visitor<'a> {
     fn new(path: &'a Path, cfg: &'a ScanConfig, loc: Locator<'a>) -> Visitor<'a> {
         let posix = path.to_string_lossy().replace('\\', "/");
+        // Case-sensitive on purpose: extension dispatch in `scan::scan_file` is
+        // too, and the gem compares the literal suffix.
+        #[allow(
+            clippy::case_sensitive_file_extension_comparisons,
+            reason = "gem parity: a `.RB` file is not a Ruby file to either tool"
+        )]
         let is_rb = posix.ends_with(".rb");
         let root = cfg.matching_root(path);
         // Blocker B6: the gem hardcodes `app/views/` and `app/components/`.
@@ -310,8 +316,7 @@ impl<'a> Visitor<'a> {
             .iter()
             .filter(|r| r.start <= offset && offset < r.end)
             .min_by_key(|r| r.end - r.start)
-            .map(|r| r.ctx.clone())
-            .unwrap_or_else(|| self.root_ctx())
+            .map_or_else(|| self.root_ctx(), |r| r.ctx.clone())
     }
 
     fn handle_magic_comment(&mut self, offset: usize, text: &[u8]) {
@@ -370,7 +375,7 @@ impl<'a> Visitor<'a> {
 impl<'pr> pr::Visit<'pr> for Visitor<'_> {
     fn visit_module_node(&mut self, node: &pr::ModuleNode<'pr>) {
         let mut path = self.parent_path().to_vec();
-        path.push(underscore(&name_of(node.name())));
+        path.push(underscore(&name_of(&node.name())));
         let loc = node.location();
         self.scopes.push(Scope {
             kind: ScopeKind::Module,
@@ -383,7 +388,7 @@ impl<'pr> pr::Visit<'pr> for Visitor<'_> {
     }
 
     fn visit_class_node(&mut self, node: &pr::ClassNode<'pr>) {
-        let name = name_of(node.name());
+        let name = name_of(&node.name());
         // ref: nodes.rb ParsedClass#controller?, #mailer?, #view_component?
         let controller = name.ends_with("Controller");
         let mailer = name.ends_with("Mailer");
@@ -427,7 +432,7 @@ impl<'pr> pr::Visit<'pr> for Visitor<'_> {
     }
 
     fn visit_def_node(&mut self, node: &pr::DefNode<'pr>) {
-        let name = name_of(node.name());
+        let name = name_of(&node.name());
         // ref: visitor.rb:74-79 — privacy comes from the enclosing class.
         let (parent_path, parent_caps, view_component, private_method) =
             match self.enclosing_definition() {
@@ -621,7 +626,7 @@ fn process_arguments(node: &pr::CallNode) -> (Vec<ArgVal>, Vec<(String, ArgVal)>
     };
     let mut positional = Vec::new();
     let mut kwargs = Vec::new();
-    for arg in arguments.arguments().iter() {
+    for arg in &arguments.arguments() {
         if let Some(kw) = arg.as_keyword_hash_node() {
             kwargs = keyword_hash(&kw);
         } else {
@@ -633,14 +638,13 @@ fn process_arguments(node: &pr::CallNode) -> (Vec<ArgVal>, Vec<(String, ArgVal)>
 
 fn keyword_hash(node: &pr::KeywordHashNode) -> Vec<(String, ArgVal)> {
     let mut out = Vec::new();
-    for el in node.elements().iter() {
+    for el in &node.elements() {
         // ref: arguments_visitor.rb:14 — an `**splat` is skipped.
         let Some(assoc) = el.as_assoc_node() else {
             continue;
         };
-        let key = match reduce(&assoc.key()) {
-            ArgVal::Str(s) => s,
-            _ => continue,
+        let ArgVal::Str(key) = reduce(&assoc.key()) else {
+            continue;
         };
         out.push((key, reduce(&assoc.value())));
     }
@@ -673,10 +677,10 @@ fn reduce(node: &pr::Node) -> ArgVal {
     }
     // Blocker B5: build a key pattern from the static parts.
     if let Some(n) = node.as_interpolated_string_node() {
-        return ArgVal::Pattern(interpolated_pattern(n.parts()));
+        return ArgVal::Pattern(interpolated_pattern(&n.parts()));
     }
     if let Some(n) = node.as_interpolated_symbol_node() {
-        return ArgVal::Pattern(interpolated_pattern(n.parts()));
+        return ArgVal::Pattern(interpolated_pattern(&n.parts()));
     }
     // Only ever an array element — `t([a: 1])`. `process_arguments` takes the
     // call's own keyword hash before it reduces anything, and an `assoc` value
@@ -701,13 +705,13 @@ fn reduce(node: &pr::Node) -> ArgVal {
 ///
 /// `*:` is "part of exactly one segment", which is the replacement the gem uses
 /// for the same job in `used_keys.rb#replace_key_exp`.
-fn interpolated_pattern(parts: pr::NodeList) -> String {
+fn interpolated_pattern(parts: &pr::NodeList) -> String {
     let mut out = String::new();
-    for part in parts.iter() {
+    for part in parts {
         if let Some(n) = part.as_string_node() {
             out.push_str(&String::from_utf8_lossy(n.unescaped()));
         } else if let Some(n) = part.as_interpolated_string_node() {
-            out.push_str(&interpolated_pattern(n.parts()));
+            out.push_str(&interpolated_pattern(&n.parts()));
         } else {
             // Any `#{...}` becomes a single-segment wildcard.
             out.push_str("*:");
@@ -749,7 +753,7 @@ fn resolve_scope(kwargs: &[(String, ArgVal)]) -> Result<Option<String>, ScopeErr
 
 // ---- helpers ----
 
-fn name_of(id: pr::ConstantId) -> String {
+fn name_of(id: &pr::ConstantId) -> String {
     String::from_utf8_lossy(id.as_slice()).into_owned()
 }
 
@@ -776,7 +780,7 @@ fn is_i18n_receiver(recv: &pr::Node) -> bool {
 /// The parts of a constant path, as `full_name_parts` returns them.
 fn constant_path_parts(node: &pr::Node) -> Vec<String> {
     if let Some(n) = node.as_constant_read_node() {
-        return vec![name_of(n.name())];
+        return vec![name_of(&n.name())];
     }
     if let Some(n) = node.as_constant_path_node() {
         let mut parts = n
@@ -784,7 +788,7 @@ fn constant_path_parts(node: &pr::Node) -> Vec<String> {
             .map(|p| constant_path_parts(&p))
             .unwrap_or_default();
         if let Some(name) = n.name() {
-            parts.push(name_of(name));
+            parts.push(name_of(&name));
         }
         return parts;
     }
@@ -797,7 +801,7 @@ fn constant_path_parts(node: &pr::Node) -> Vec<String> {
 fn strip_magic_prefix(text: &str) -> Option<&str> {
     let mut chars = text.char_indices();
     let (_, _first) = chars.next()?;
-    let rest_start = chars.clone().next().map(|(i, _)| i).unwrap_or(text.len());
+    let rest_start = chars.clone().next().map_or(text.len(), |(i, _)| i);
     let rest = &text[rest_start..];
     let trimmed = rest.trim_start_matches([' ', '\t']);
     let payload = trimmed.strip_prefix(MAGIC_COMMENT_MARKER)?;

@@ -173,7 +173,7 @@ pub fn reserved(store: &Store, locales: &[String]) -> InterpolationReport {
                 key: leaf.key.clone(),
                 value: Some(value.to_string()),
                 reason: Some(Reason::Reserved {
-                    names: hits.iter().map(|n| n.to_string()).collect(),
+                    names: hits.iter().map(ToString::to_string).collect(),
                 }),
             });
         }

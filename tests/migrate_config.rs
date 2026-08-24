@@ -250,7 +250,7 @@ fn from_and_to_can_be_named_explicitly() {
         .arg(&s.root)
         .output()
         .unwrap();
-    assert_eq!(out.status.code(), Some(0), "{:?}", out);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
     // The named source was read, not the one the default search would find,
     // and the destination directory was created.
     let written = std::fs::read_to_string(s.root.join("out/new.yml")).unwrap();

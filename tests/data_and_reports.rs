@@ -4,6 +4,7 @@
 
 use i18n_tasks_rs::config::Config;
 use i18n_tasks_rs::data::load::{Store, Value};
+use i18n_tasks_rs::pattern::PatternSet;
 use i18n_tasks_rs::report::missing::MissingType;
 use i18n_tasks_rs::report::{Outcome, Reason, interpolations, missing, unused};
 use i18n_tasks_rs::stats::forest_stats;
@@ -1158,7 +1159,7 @@ fn missing_used_falls_back_to_the_key_itself() {
     keys.insert("absent".to_string(), vec![occ("absent")]);
     let used = UsedKeys {
         keys,
-        patterns: Default::default(),
+        patterns: PatternSet::default(),
         pattern_sources: Vec::new(),
         opaque: Vec::new(),
         files_scanned: 1,

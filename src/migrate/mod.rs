@@ -94,6 +94,11 @@ pub fn find_gem_config(root: &Path) -> Option<PathBuf> {
 }
 
 /// `from` and `to` are only used for messages and for the header.
+///
+/// # Errors
+///
+/// The gem config does not parse as YAML once its ERB is stripped, is not a
+/// mapping, or has a non-string key.
 pub fn migrate(src: &str, from: &Path, to: &Path) -> Result<Migration, String> {
     let stripped = strip_erb(src);
     let lines: Vec<&str> = stripped.text.lines().collect();
@@ -385,11 +390,10 @@ mod tests {
              \x20   - I18n::Tasks::Scanners::AstMatchers::RailsModelMatcher\n\
              \x20 unheard_of: 1\n");
         let reason = |key: &str| {
-            m.dropped
-                .iter()
-                .find(|d| d.key == key)
-                .map(|d| d.reason.clone())
-                .unwrap_or_else(|| panic!("{key} was not dropped: {:?}", m.dropped))
+            let Some(d) = m.dropped.iter().find(|d| d.key == key) else {
+                panic!("{key} was not dropped: {:?}", m.dropped)
+            };
+            d.reason.clone()
         };
         assert!(reason("data.adapter").contains("YAML file system"));
         assert!(reason("data.json").contains("JSON locale files"));

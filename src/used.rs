@@ -14,6 +14,7 @@ use crate::scan::{FileScan, Occurrence, ScanConfig, scan_file};
 use rayon::prelude::*;
 use std::collections::BTreeMap;
 
+#[derive(Debug)]
 pub struct UsedKeys {
     /// Resolved keys and every place they are used, sorted by key. This is the
     /// only record of which keys are used; `key_used` reads it directly.
@@ -59,6 +60,11 @@ impl UsedKeys {
         false
     }
 
+    /// # Errors
+    ///
+    /// A `search.only` or `search.exclude` entry is not a valid glob. A file
+    /// that cannot be read is skipped, not an error: the gem's `Find.find`
+    /// walk does the same.
     pub fn scan(cfg: &Config) -> Result<UsedKeys, String> {
         let finder = Finder::new(cfg)?;
         let candidates = finder.discover();
@@ -150,7 +156,7 @@ mod tests {
         }
         UsedKeys {
             keys: map,
-            patterns: Default::default(),
+            patterns: PatternSet::default(),
             pattern_sources: Vec::new(),
             opaque: Vec::new(),
             files_scanned: 0,

@@ -35,6 +35,10 @@ use std::sync::LazyLock;
 ///
 /// ref: `pattern_scanner.rb:96-106` and `pattern_with_scope_scanner.rb:12-16`,
 /// with the argument separator widened to the union described above.
+#[allow(
+    clippy::expect_used,
+    reason = "a static pattern that fails to compile is a bug here, not a run-time condition"
+)]
 static CALL_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
         r#"(?x)
@@ -62,6 +66,10 @@ static CALL_RE: LazyLock<Regex> = LazyLock::new(|| {
 
 /// ref: ruby_key_literals.rb:5 `LITERAL_RE`, used to decide whether a scope
 /// fragment is a literal at all.
+#[allow(
+    clippy::expect_used,
+    reason = "a static pattern that fails to compile is a bug here, not a run-time condition"
+)]
 static LITERAL_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
         r#"(?x) :?" (?: \\ [\s\S] | [^"\\\n] )*" | :?' (?: \\ [\s\S] | [^'\\\n] )*' | : \w+ "#,
@@ -78,7 +86,9 @@ pub fn scan(bytes: &[u8], path: &Path, cfg: &ScanConfig) -> FileScan {
     let mut out = FileScan::default();
     let mut at = 0;
     while let Some(caps) = CALL_RE.captures_at(bytes, at) {
-        let whole = caps.get(0).expect("group 0 always matches");
+        // Group 0 always participates, so the `else` arms are unreachable;
+        // they keep a regex change from turning into a panic.
+        let Some(whole) = caps.get(0) else { break };
         // The gem's `t` is inside the match and `I18n.` is inside the
         // lookbehind, so the position it reports is the `t`.
         let call_pos = caps.name("i18n").map_or(whole.start(), |m| m.end());
@@ -89,7 +99,10 @@ pub fn scan(bytes: &[u8], path: &Path, cfg: &ScanConfig) -> FileScan {
             at = call_pos + 1;
             continue;
         }
-        let arg = caps.name("arg").expect("arg always matches").as_bytes();
+        let Some(arg) = caps.name("arg") else {
+            continue;
+        };
+        let arg = arg.as_bytes();
         let arg = String::from_utf8_lossy(arg).into_owned();
         let scope = caps
             .name("scope")

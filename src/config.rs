@@ -156,6 +156,12 @@ impl Config {
     /// `root` is the directory every config path is relative to. The gem runs
     /// from the project root and resolves paths against the working directory,
     /// so that is the default.
+    ///
+    /// # Errors
+    ///
+    /// The file cannot be read — the message then names the gem config, if one
+    /// is there to migrate — the working directory cannot be read when `root`
+    /// is `None`, or `parse` rejects the contents.
     pub fn load(path: &Path, root: Option<&Path>) -> Result<Config, String> {
         let src = std::fs::read_to_string(path).map_err(|e| {
             let mut msg = format!("cannot read config {}: {e}", path.display());
@@ -180,6 +186,11 @@ impl Config {
         Config::parse(&src, path, root)
     }
 
+    /// # Errors
+    ///
+    /// The source holds `<%` (blocker B3: no code execution, ever), is not a
+    /// YAML mapping, names a setting this port does not have, or gives a
+    /// setting a value of the wrong kind.
     pub fn parse(src: &str, path: &Path, root: PathBuf) -> Result<Config, String> {
         // Blocker B3: no code execution, ever.
         if src.contains("<%") {
@@ -215,7 +226,7 @@ impl Config {
             only: None,
             relative_roots: DEFAULT_RELATIVE_ROOTS
                 .iter()
-                .map(|s| s.to_string())
+                .map(ToString::to_string)
                 .collect(),
             relative_exclude_method_name_paths: Vec::new(),
         };
@@ -234,7 +245,7 @@ impl Config {
                     base_locale = v
                         .as_str()
                         .ok_or_else(|| ctx(key) + " must be a string")?
-                        .into()
+                        .into();
                 }
                 "locales" => locales = Some(str_list(v, &ctx(key))?),
                 "ignore" => ignore = str_list(v, &ctx(key))?,
@@ -244,7 +255,7 @@ impl Config {
                 // a translated config does not have to strip it.
                 "ignore_eq_base" => ignore_eq_base = ignore_spec(v, &ctx(key))?,
                 "ignore_inconsistent_interpolations" => {
-                    ignore_inconsistent = ignore_spec(v, &ctx(key))?
+                    ignore_inconsistent = ignore_spec(v, &ctx(key))?;
                 }
                 "data" => {
                     let m = v.as_map().ok_or_else(|| ctx(key) + " must be a mapping")?;
@@ -283,7 +294,7 @@ impl Config {
                             "only" => search.only = Some(str_list(sv, &c)?),
                             "relative_roots" => search.relative_roots = str_list(sv, &c)?,
                             "relative_exclude_method_name_paths" => {
-                                search.relative_exclude_method_name_paths = str_list(sv, &c)?
+                                search.relative_exclude_method_name_paths = str_list(sv, &c)?;
                             }
                             other => return Err(unknown(path, &format!("search.{other}"))),
                         }
@@ -341,7 +352,7 @@ impl Config {
 fn fnv1a64(bytes: &[u8]) -> u64 {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     for &b in bytes {
-        h ^= b as u64;
+        h ^= u64::from(b);
         h = h.wrapping_mul(0x1000_0000_01b3);
     }
     h
@@ -359,7 +370,7 @@ fn unknown(path: &Path, key: &str) -> String {
 }
 
 fn truthy(node: &Node) -> bool {
-    matches!(node.as_str(), Some("true") | Some("yes") | Some("on"))
+    matches!(node.as_str(), Some("true" | "yes" | "on"))
 }
 
 fn str_list(node: &Node, ctx: &str) -> Result<Vec<String>, String> {
@@ -460,7 +471,12 @@ pub fn interpolate_locale(template: &str, locale: &str) -> String {
                 continue;
             }
         }
-        let ch = template[i..].chars().next().unwrap();
+        // `i` is on a character boundary and inside the string, so the `else`
+        // arm only restates the loop condition. A character is copied whole:
+        // the loop compares bytes, but must not split a multi-byte character.
+        let Some(ch) = template[i..].chars().next() else {
+            break;
+        };
         out.push(ch);
         i += ch.len_utf8();
     }
@@ -470,6 +486,19 @@ pub fn interpolate_locale(template: &str, locale: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Four loops scan bytes but copy characters — here, in `locale_pattern_re`,
+    /// in `route::substitute_captures` and in `pattern::tokenize`. Each one must
+    /// step a whole character, so a multi-byte name survives the pass.
+    #[test]
+    fn a_multi_byte_path_survives_locale_interpolation() {
+        assert_eq!(
+            interpolate_locale("config/переводы/%{locale}.yml", "ru"),
+            "config/переводы/ru.yml"
+        );
+        // The escape and the substitution still work either side of it.
+        assert_eq!(interpolate_locale("100%% ü %{locale}", "de"), "100% ü de");
+    }
 
     fn parse(src: &str) -> Result<Config, String> {
         Config::parse(src, Path::new("config/i18n-tasks.yml"), PathBuf::from("."))

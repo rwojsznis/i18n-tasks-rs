@@ -38,20 +38,24 @@ pub mod read_log {
     }
 
     pub fn record(path: &Path) {
-        log().lock().expect("read log").push(path.to_path_buf());
+        log()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(path.to_path_buf());
     }
 
     /// How many reads have happened under `root`, over the whole process.
     pub fn count_under(root: &Path) -> usize {
         log()
             .lock()
-            .expect("read log")
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .iter()
             .filter(|p| p.starts_with(root))
             .count()
     }
 }
 
+#[derive(Debug)]
 pub struct Finder {
     only: Option<GlobSet>,
     exclude: GlobSet,
@@ -63,6 +67,9 @@ pub struct Finder {
 }
 
 impl Finder {
+    /// # Errors
+    ///
+    /// A `search.only` or `search.exclude` entry is not a valid glob.
     pub fn new(cfg: &Config) -> Result<Finder, String> {
         // `search.only` takes priority over `exclude`, but `exclude` still
         // applies, and ALWAYS_EXCLUDE applies whatever the config says.
@@ -71,13 +78,14 @@ impl Finder {
             _ => None,
         };
         let mut excludes: Vec<String> = cfg.search.exclude.clone();
-        excludes.extend(ALWAYS_EXCLUDE.iter().map(|s| s.to_string()));
+        excludes.extend(ALWAYS_EXCLUDE.iter().map(ToString::to_string));
         let exclude = build_globs(&excludes)?;
         let paths = cfg.search.paths.iter().map(|p| cfg.root.join(p)).collect();
         Ok(Finder {
             only,
             exclude,
-            prefilter: AhoCorasick::new(NEEDLES).expect("static needles compile"),
+            prefilter: AhoCorasick::new(NEEDLES)
+                .map_err(|e| format!("cannot build the needle prefilter: {e}"))?,
             paths,
             root: cfg.root.clone(),
         })
@@ -396,9 +404,7 @@ mod tests {
         let root = project("badglob");
         let body = "search:\n  paths: [.]\n  exclude: ['a[']\n";
         let cfg = Config::parse(body, &root.join("i18n-tasks.yml"), root.clone()).unwrap();
-        let e = Finder::new(&cfg)
-            .err()
-            .expect("a malformed glob must not compile");
+        let e = Finder::new(&cfg).expect_err("a malformed glob must not compile");
         assert!(e.contains("bad glob `a[`"), "{e}");
         let _ = std::fs::remove_dir_all(&root);
     }

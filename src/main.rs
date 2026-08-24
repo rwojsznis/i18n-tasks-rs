@@ -4,6 +4,12 @@
 //! something, 2 means the tool itself failed. The gem signals the middle case
 //! with an internal `:exit1`.
 
+// A panicking library is a bug: this crate returns `Result` everywhere and the
+// only command that writes does so under `--write`. Declared here rather than in
+// `Cargo.toml`, because a manifest `[lints]` table also covers `tests/`, where a
+// panic *is* the failure report. `clippy.toml` exempts the unit tests in `src/`.
+#![warn(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
 use clap::{Parser, Subcommand};
 use i18n_tasks_rs::config::{Config, DEFAULT_CONFIG_PATH};
 use i18n_tasks_rs::data::load::Store;

@@ -9,8 +9,11 @@ use std::path::Path;
 
 fn cfg(roots: &[&str], exclude_method: &[&str]) -> ScanConfig {
     ScanConfig {
-        relative_roots: roots.iter().map(|s| s.to_string()).collect(),
-        relative_exclude_method_name_paths: exclude_method.iter().map(|s| s.to_string()).collect(),
+        relative_roots: roots.iter().map(ToString::to_string).collect(),
+        relative_exclude_method_name_paths: exclude_method
+            .iter()
+            .map(ToString::to_string)
+            .collect(),
     }
 }
 
