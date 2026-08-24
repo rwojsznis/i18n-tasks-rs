@@ -203,8 +203,8 @@ An unknown key is an error, with the supported list in the message.
 | Path | What |
 |---|---|
 | `src/config.rs` | the plain-YAML config, plus a stable config digest |
-| `src/init.rs` | `init-config`: a config read off the project's layout |
-| `src/migrate.rs` | `migrate-config`: a gem config to the above |
+| `src/init/` | `init-config`: a config read off the project's layout |
+| `src/migrate/` | `migrate-config`: a gem config to the above |
 | `src/pattern.rs` | the key pattern DSL, as a segment matcher (B2) |
 | `src/keys.rs` | key splitting and `ActiveSupport#underscore` |
 | `src/discover.rs` | the file walk and the aho-corasick prefilter |

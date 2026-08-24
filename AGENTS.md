@@ -29,8 +29,8 @@ compared over the same project.
 | Path | What |
 |---|---|
 | `src/config.rs` | the plain-YAML config (no ERB, no code execution — blocker B3) |
-| `src/init.rs` | `init-config`: generates one from the project's own layout |
-| `src/migrate.rs` | `migrate-config`: converts a gem config into ours |
+| `src/init/` | `init-config`: detect, render, verify |
+| `src/migrate/` | `migrate-config`: ERB, per-key decisions, render |
 | `src/pattern.rs` | the key-pattern DSL as a segment matcher (B2) |
 | `src/walk.rs` | the one directory walk; the callers pass the prune rule |
 | `src/discover.rs` | glob filters over the walk + aho-corasick prefilter |
