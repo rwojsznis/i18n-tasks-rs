@@ -5,11 +5,12 @@ is the reference implementation for every behaviour here; every deliberate
 difference is written up in [`docs/accepted-diffs.md`](docs/accepted-diffs.md),
 and anything not listed there is a bug.
 
-It reads every file type the gem does bar Haml — `.rb` through Prism, `.erb`
-through one synthetic Ruby buffer per file, and Slim, JS and TS through a regex
-scanner — and covers the read-only reports, the write path (`normalize`,
-`check-normalized`) and a `rayon` fan-out over the file list. Rails inference is
-out of scope; see [`docs/design-notes.md`](docs/design-notes.md).
+It reads every file type the gem does bar Haml: `.rb` through Prism, `.erb`
+through one synthetic Ruby buffer per file, and everything else — Slim, JS, JSX,
+TS, TSX, Vue — through a regex scanner. It covers the read-only reports, the
+write path (`normalize`, `check-normalized`) and a `rayon` fan-out over the file
+list. Rails inference is out of scope; see
+[`docs/design-notes.md`](docs/design-notes.md).
 
 ## Install
 
@@ -158,7 +159,7 @@ An unknown key is an error, with the supported list in the message.
 | `src/lineindex.rs` | one line-offset index per file |
 | `src/scan/ruby.rs` | the Prism visitor — the core |
 | `src/scan/erb.rs` | ERB tags to one Ruby buffer per file, plus a source map |
-| `src/scan/template.rs` | Slim, JS and TS, by regex, as the gem does |
+| `src/scan/template.rs` | Slim, JS, TS and every other extension, by regex |
 | `src/data/load.rs` | YAML reading, one flat key map per locale |
 | `src/data/emit.rs` | the hand-written YAML emitter (B1) |
 | `src/data/route.rs` | the conservative and pattern routers |

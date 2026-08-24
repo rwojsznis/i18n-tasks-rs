@@ -1,0 +1,109 @@
+# AGENTS.md
+
+You must use ASD-STE100 Simplified Technical English (STE) when it doesn't detract from meaning.
+
+## What this is
+
+`i18n-tasks-rs` is a Rust port of the Ruby gem
+[`i18n-tasks`](https://github.com/glebm/i18n-tasks): it finds missing and unused
+translations in a Rails project, checks interpolations, and normalizes locale
+YAML. Single crate, one binary (`i18n-tasks-rs`) plus a library (`i18n_tasks_rs`).
+
+**The gem is the reference implementation.** Behaviour that differs from it is a
+bug *unless* it is written up in [`docs/accepted-diffs.md`](docs/accepted-diffs.md).
+That file, and [`docs/design-notes.md`](docs/design-notes.md), are the two
+documents to read before changing anything non-trivial:
+
+- `docs/design-notes.md` — the five design decisions, blockers B1–B10, what is
+  deliberately dropped, and why there is no cache. Source comments cite these by
+  number ("design decision 3", "blocker B5", "section 4a").
+- `docs/accepted-diffs.md` — every deliberate difference from the gem, numbered.
+  If you introduce a new one, add an entry in the same commit.
+
+The gem is not vendored here. Differential work needs a local checkout of it;
+`i18n-tasks-rs find -f json` exists so the two tools' occurrence sets can be
+compared over the same project.
+
+## Layout
+
+| Path | What |
+|---|---|
+| `src/config.rs` | the plain-YAML config (no ERB, no code execution — blocker B3) |
+| `src/migrate.rs` | `migrate-config`: converts a gem config into ours |
+| `src/pattern.rs` | the key-pattern DSL as a segment matcher (B2) |
+| `src/discover.rs` | file walk + aho-corasick prefilter |
+| `src/scan/ruby.rs` | the Prism visitor — the core |
+| `src/scan/erb.rs` | ERB tags → one Ruby buffer per file, plus a source map |
+| `src/scan/template.rs` | Slim, JS, TS and everything else, by regex |
+| `src/data/` | YAML load, the hand-written emitter (B1), the two routers |
+| `src/report/` | `unused`, `missing`, interpolation checks, `normalize` |
+| `tests/` | integration tests; `tests/fixtures/` holds the gem's own fixtures |
+| `docs/` | design notes and accepted diffs |
+
+Unit tests live in `#[cfg(test)] mod tests` next to the code; cross-cutting and
+CLI-level tests live in `tests/`.
+
+## Workflow — do it in this order
+
+1. **Write the failing test first.** Before any implementation, add a test that
+   fails for the reason you expect. Run it and *read the failure* — a test that
+   passes immediately, or fails with the wrong message, is not yet a test of the
+   thing you meant.
+2. **Then write the implementation**, and only enough of it to make that test
+   pass.
+3. **Check your work.** Run the full suite, not just the new test. If the change
+   touches scanning or reporting, also run the binary against a real project and
+   look at the output; `cargo test` passing is necessary, not sufficient.
+4. **Run the linters last**, and get them clean before you call the work done.
+
+```bash
+cargo test                                   # 334 tests, all must pass
+cargo clippy --all-targets -- -D warnings
+cargo fmt
+./tests/no_cache.sh                          # guards "no cache, anywhere"
+```
+
+Do not report a change as finished until all four are green. If something is
+left failing or unfinished, say so explicitly rather than narrowing the scope
+quietly.
+
+## Where tests go
+
+- A scanner behaviour, a config rule, a pattern-matching case → a unit test in
+  that module.
+- A CLI flag, an exit code, an end-to-end report → `tests/`.
+- Anything mirroring a gem spec → port the gem's example and keep a
+  `ref: spec/<file>.rb:<line>` comment, as the existing tests do.
+- New scanner fixtures go in `tests/fixtures/`. Fixture paths in tests are
+  crate-relative (`tests/fixtures/...`), but the *logical* path handed to
+  `scan_file` is the project-relative one, because relative-key resolution
+  depends on it.
+
+## Conventions
+
+- Comments cite the gem: `ref: lib/i18n/tasks/<file>.rb:<lines>`. Keep that
+  habit — it is how a reader checks parity.
+- **No caching**, in any form: no cache module, no `--cache` flag, no cache
+  dependency. `tests/no_cache.sh` enforces it. See section 4a of the design
+  notes before arguing otherwise.
+- **Writing is opt-in.** `normalize` is the only command that touches disk, and
+  only under `--write`; deleting an emptied file additionally needs
+  `--allow-delete`. Do not add a command that writes by default.
+- **Parallelism must not change output.** `tests/jobs.rs` holds every command,
+  in both formats, byte-identical at `--jobs 1`, `2`, `8`, `16` and the default.
+  A change that reorders results is a bug even if the set is the same.
+- The per-file scan stays a pure `fn(&[u8], &Path) -> FileScan`.
+- Exit codes: **0** check passed, **1** check found something, **2** the tool
+  itself failed.
+
+## Gotchas
+
+- The emitter cannot match Psych byte for byte and does not try (blocker B1).
+  Correctness is *value preservation* plus *idempotence*, both asserted in
+  `tests/normalize.rs`.
+- Extension dispatch has no allowlist: `.rb` → Prism, `.erb` → ERB, everything
+  else → the regex scanner. So `.jsx`, `.tsx`, `.vue` and friends are scanned.
+- `//`-comment skipping only covers `.js`/`.es6`; `.jsx`, `.ts` and `.tsx` are
+  absent from the table. This matches the gem's `IGNORE_LINES` — do not "fix" it
+  without an accepted-diffs entry.
+- Lowercase `i18n.t(` is not matched; `I18n.t(` and bare `t(` are. Gem parity.
