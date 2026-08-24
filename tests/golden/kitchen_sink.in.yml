@@ -1,0 +1,71 @@
+en:
+  zz_last: sorts last
+  multiline:
+    literal: |
+      hello
+      world
+
+      newline
+    literal_strip: |-
+      hello
+      world
+    literal_keep: |+
+      hello
+      world
+
+    folded: >
+      hello
+      world
+
+      newline
+    folded_strip: >-
+      hello
+      world
+
+      newline
+    folded_keep: >+
+      hello
+      world
+
+      newline
+  emoji:
+    trailing: "hello 😀"
+    leading: "😀 hello"
+  quoting:
+    interpolation: "%{count} items"
+    colon: "a: b"
+    hash: "a #b"
+    trailing_space: "trail "
+    leading_space: " lead"
+    empty: ""
+    dash: "-dash"
+    apostrophe: "it's here"
+    tab: "a\tb"
+    quotes: 'he said "hi"'
+    non_word_first: "« quoted »"
+    non_word_first_with_quote: '<a href="%{url}">link</a>'
+    indicator_with_quote: '#a "b"'
+  nil_value:
+  booleans:
+    'true': one
+    'no': two
+    'on': three
+    'yes': four
+  numeric:
+    '1': one
+    '2.5': two and a half
+    '007': oh seven
+    '2020-01-01': a date
+  deep:
+    a: {b: {c: {d: {e: {f: {g: {h: {i: {j: deep}}}}}}}}}
+  sequences:
+    order:
+      - :day
+      - :month
+      - :year
+    people:
+      - name: Ada
+        age: 36
+      - name: Alan
+        age: 41
+    empty_seq: []

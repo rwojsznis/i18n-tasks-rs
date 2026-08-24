@@ -1,0 +1,792 @@
+//! Locale data loading.
+//!
+//! ref: lib/i18n/tasks/data/file_system_base.rb
+//! ref: lib/i18n/tasks/data/adapter/yaml_adapter.rb
+//!
+//! Design decision 1 in `docs/design-notes.md`: a flat key map, not a node
+//! tree. The gem's
+//! `select_nodes` deep-copies every matching node through `node.derive`
+//! (`data/tree/traversal.rb:93-128`), which is 2.04 s of a 5.5 s `unused` run.
+
+use crate::config::{Config, interpolate_locale};
+use crate::yaml::{self, Node};
+use regex::Regex;
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+/// A leaf value. Anything that is not a mapping is a leaf, which is what
+/// `Node.from_key_value` does with a non-Hash value.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Value {
+    Str(String),
+    Nil,
+    Bool(bool),
+    /// The scalar as written, for a number or any other plain scalar.
+    Plain(String),
+    /// A YAML sequence. The gem treats a sequence as a leaf value.
+    Seq(Vec<Value>),
+    /// A mapping nested inside a sequence. The flattener never produces one at
+    /// the top of a leaf, because it walks into every mapping, so this only
+    /// occurs under a `Seq`. A large real-world project has dozens of them.
+    Map(Vec<(String, Value)>),
+}
+
+impl Value {
+    /// Ruby `#to_s`, which is what `forest_stats` counts characters of.
+    /// ref: lib/i18n/tasks/stats.rb
+    pub fn to_display_string(&self) -> String {
+        match self {
+            Value::Str(s) => s.clone(),
+            Value::Nil => String::new(),
+            Value::Bool(b) => b.to_string(),
+            Value::Plain(s) => s.clone(),
+            // Ruby `Array#to_s` and `Hash#to_s` are the `inspect` forms.
+            Value::Seq(_) | Value::Map(_) => self.inspect(),
+        }
+    }
+
+    fn inspect(&self) -> String {
+        match self {
+            Value::Str(s) => format!("{s:?}"),
+            Value::Nil => "nil".into(),
+            Value::Bool(b) => b.to_string(),
+            Value::Plain(s) => s.clone(),
+            Value::Seq(items) => {
+                let inner: Vec<String> = items.iter().map(Value::inspect).collect();
+                format!("[{}]", inner.join(", "))
+            }
+            // Ruby 3.4 onwards writes `{"a" => "b"}`, with spaces around `=>`.
+            Value::Map(entries) => {
+                let inner: Vec<String> = entries
+                    .iter()
+                    .map(|(k, v)| format!("{k:?} => {}", v.inspect()))
+                    .collect();
+                format!("{{{}}}", inner.join(", "))
+            }
+        }
+    }
+
+    pub fn as_str(&self) -> Option<&str> {
+        match self {
+            Value::Str(s) | Value::Plain(s) => Some(s),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Leaf {
+    /// The dotted key, without the locale.
+    pub key: String,
+    pub value: Value,
+    /// Number of key levels, which is what `forest_stats` calls a segment.
+    pub depth: u16,
+    /// Blocker B8: the conservative router needs the origin file per key.
+    pub path: Arc<Path>,
+    /// Set only when a key segment holds a dot, which the dotted form cannot
+    /// express. The emitter needs the real segments, or it would split
+    /// `2.5` into two nesting levels and rewrite the file wrongly.
+    pub odd_segments: Option<Box<[Box<str>]>>,
+}
+
+impl Leaf {
+    /// The real key segments.
+    pub fn segments(&self) -> Vec<&str> {
+        match &self.odd_segments {
+            Some(segs) => segs.iter().map(AsRef::as_ref).collect(),
+            None => self.key.split('.').collect(),
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct LocaleTree {
+    pub locale: String,
+    pub leaves: Vec<Leaf>,
+    index: HashMap<String, usize>,
+    /// Every key that is an interior node, so ancestor lookups are cheap.
+    interior: HashSet<String>,
+    /// Immediate child segment names, in insertion order.
+    children: HashMap<String, Vec<String>>,
+    /// Keys whose children are all leaves with a plural suffix.
+    /// ref: lib/i18n/tasks/plural_keys.rb#plural_forms?
+    plural_nodes: HashSet<String>,
+    /// Every top-level key of each file read for this locale. `normalize`
+    /// writes one locale per file, so it refuses to touch a file that holds a
+    /// locale it is not writing.
+    pub file_locales: HashMap<PathBuf, Vec<String>>,
+}
+
+impl LocaleTree {
+    pub fn get(&self, key: &str) -> Option<&Leaf> {
+        self.index.get(key).map(|&i| &self.leaves[i])
+    }
+
+    /// True when the key names a leaf or an interior node, which is what
+    /// `key_value?` tests through `value_or_children_hash`.
+    pub fn has_key(&self, key: &str) -> bool {
+        self.index.contains_key(key) || self.interior.contains(key)
+    }
+
+    pub fn is_interior(&self, key: &str) -> bool {
+        self.interior.contains(key)
+    }
+
+    /// Leaves sorted by key, for deterministic reports.
+    pub fn sorted_keys(&self) -> Vec<&Leaf> {
+        let mut out: Vec<&Leaf> = self.leaves.iter().collect();
+        out.sort_by(|a, b| a.key.cmp(&b.key));
+        out
+    }
+
+    fn insert(&mut self, leaf: Leaf) {
+        // A later file overrides an earlier one, matching `reduce(:merge!)`.
+        if let Some(&i) = self.index.get(&leaf.key) {
+            self.leaves[i] = leaf;
+            return;
+        }
+        self.index.insert(leaf.key.clone(), self.leaves.len());
+        self.leaves.push(leaf);
+    }
+
+    /// The immediate child segment names of `key`.
+    pub fn children(&self, key: &str) -> &[String] {
+        self.children.get(key).map_or(&[][..], Vec::as_slice)
+    }
+
+    /// ref: lib/i18n/tasks/plural_keys.rb#plural_forms?
+    pub fn is_plural_node(&self, key: &str) -> bool {
+        self.plural_nodes.contains(key)
+    }
+
+    /// Every plural node, sorted. ref: plural_keys.rb#plural_nodes
+    pub fn sorted_plural_nodes(&self) -> Vec<&str> {
+        let mut out: Vec<&str> = self.plural_nodes.iter().map(String::as_str).collect();
+        out.sort_unstable();
+        out
+    }
+
+    fn finish(&mut self) {
+        // One pass to record ancestors and immediate children. Doing this once
+        // keeps `depluralize_key` constant time instead of a scan per key.
+        for leaf in &self.leaves {
+            let mut key = leaf.key.as_str();
+            while let Some(parent) = crate::keys::parent_key(key) {
+                self.interior.insert(parent.to_string());
+                let seg = &key[parent.len() + 1..];
+                let entry = self.children.entry(parent.to_string()).or_default();
+                if !entry.iter().any(|e| e == seg) {
+                    entry.push(seg.to_string());
+                }
+                key = parent;
+            }
+        }
+        for (parent, children) in &self.children {
+            let all_plural_leaves = !children.is_empty()
+                && children.iter().all(|c| {
+                    crate::plural::plural_suffix(c) && {
+                        let full = format!("{parent}.{c}");
+                        self.index.contains_key(&full) && !self.interior.contains(&full)
+                    }
+                });
+            if all_plural_leaves {
+                self.plural_nodes.insert(parent.clone());
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct Store {
+    pub base_locale: String,
+    /// Base locale first, then the rest sorted. ref: lib/i18n/tasks/locale_list.rb
+    pub locales: Vec<String>,
+    pub trees: HashMap<String, LocaleTree>,
+    /// External data is never unused and never missing.
+    /// ref: lib/i18n/tasks/data.rb#external_key?
+    pub external: HashMap<String, LocaleTree>,
+    pub warnings: Vec<String>,
+}
+
+impl Store {
+    pub fn tree(&self, locale: &str) -> Option<&LocaleTree> {
+        self.trees.get(locale)
+    }
+
+    pub fn external_has(&self, locale: &str, key: &str) -> bool {
+        self.external.get(locale).is_some_and(|t| t.has_key(key))
+    }
+
+    /// ref: lib/i18n/tasks/data.rb#key_value?
+    pub fn key_value(&self, locale: &str, key: &str) -> bool {
+        self.trees.get(locale).is_some_and(|t| t.has_key(key))
+    }
+
+    pub fn load(cfg: &Config) -> Result<Store, String> {
+        let mut warnings = Vec::new();
+        let locales = match &cfg.locales {
+            Some(l) => normalize_locale_list(l, &cfg.base_locale),
+            None => {
+                let found = available_locales(cfg);
+                if found.is_empty() {
+                    return Err(format!(
+                        "no locale data found. `data.read` patterns: {:?}, relative to {}",
+                        cfg.data.read,
+                        cfg.root.display()
+                    ));
+                }
+                normalize_locale_list(&found, &cfg.base_locale)
+            }
+        };
+
+        let mut trees = HashMap::new();
+        for locale in &locales {
+            trees.insert(
+                locale.clone(),
+                read_locale(cfg, locale, &cfg.data.read, &mut warnings)?,
+            );
+        }
+        let mut external = HashMap::new();
+        for locale in &locales {
+            external.insert(
+                locale.clone(),
+                read_locale(cfg, locale, &cfg.data.external, &mut warnings)?,
+            );
+        }
+        Ok(Store {
+            base_locale: cfg.base_locale.clone(),
+            locales,
+            trees,
+            external,
+            warnings,
+        })
+    }
+}
+
+/// ref: lib/i18n/tasks/locale_list.rb#normalize_locale_list
+fn normalize_locale_list(locales: &[String], base: &str) -> Vec<String> {
+    let mut sorted: Vec<String> = locales.to_vec();
+    sorted.sort();
+    let mut out = vec![base.to_string()];
+    out.extend(sorted.into_iter().filter(|l| l != base));
+    out
+}
+
+/// ref: lib/i18n/tasks/data/file_system_base.rb#available_locales
+fn available_locales(cfg: &Config) -> Vec<String> {
+    let mut found: Vec<String> = Vec::new();
+    for pattern in &cfg.data.read {
+        if !pattern.contains("%{locale}") {
+            continue;
+        }
+        let Some(re) = locale_pattern_re(pattern) else {
+            continue;
+        };
+        for path in glob_paths(&cfg.root, &interpolate_locale(pattern, "*")) {
+            let rel = path
+                .strip_prefix(&cfg.root)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .replace('\\', "/");
+            if let Some(locale) = extract_locale(&re, &rel)
+                && !found.contains(&locale)
+            {
+                found.push(locale);
+            }
+        }
+    }
+    found
+}
+
+/// The read pattern as an anchored regex whose one group is the locale.
+///
+/// ref: file_system_base.rb:122-124. The glob is deliberately more permissive
+/// than this regex: `config/locales/%{locale}.yml` globs to
+/// `config/locales/*.yml`, which matches `other.fr.yml`, but `%{locale}`
+/// becomes `([^/.]+)`, which a dotted name cannot satisfy. So that file names
+/// no locale. Only `.`, `/` and `\` are escaped, exactly as the gem escapes
+/// them; a read pattern holding another regex metacharacter fails to compile
+/// and is skipped, where the gem would raise.
+fn locale_pattern_re(pattern: &str) -> Option<Regex> {
+    let mut out = String::with_capacity(pattern.len() * 2);
+    out.push_str("\\A");
+    let bytes = pattern.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if pattern[i..].starts_with("%{locale}") {
+            out.push_str("([^/.]+)");
+            i += "%{locale}".len();
+            continue;
+        }
+        if bytes[i] == b'*' {
+            let start = i;
+            while i < bytes.len() && bytes[i] == b'*' {
+                i += 1;
+            }
+            // Exactly `**` crosses directories, any other run does not.
+            out.push_str(if i - start == 2 { ".*" } else { "[^/]*?" });
+            continue;
+        }
+        let ch = pattern[i..].chars().next().unwrap();
+        match ch {
+            '.' | '/' | '\\' => {
+                out.push('\\');
+                out.push(ch);
+            }
+            _ => out.push(ch),
+        }
+        i += ch.len_utf8();
+    }
+    out.push_str("\\z");
+    Regex::new(&out).ok()
+}
+
+/// Reads the locale back out of a concrete path.
+fn extract_locale(re: &Regex, path: &str) -> Option<String> {
+    Some(re.captures(path)?.get(1)?.as_str().to_string())
+}
+
+/// ref: lib/i18n/tasks/data/file_system_base.rb#read_locale
+fn read_locale(
+    cfg: &Config,
+    locale: &str,
+    patterns: &[String],
+    warnings: &mut Vec<String>,
+) -> Result<LocaleTree, String> {
+    let mut tree = LocaleTree {
+        locale: locale.to_string(),
+        ..Default::default()
+    };
+    let mut seen: HashSet<PathBuf> = HashSet::new();
+    for pattern in patterns {
+        let concrete = interpolate_locale(pattern, locale);
+        for path in glob_paths(&cfg.root, &concrete) {
+            // A real-world config has two overlapping `data.read` globs, where the
+            // second matches every file the first does. Deduplicate by resolved
+            // path so a file is read once, in first-glob order.
+            if !seen.insert(path.clone()) {
+                continue;
+            }
+            let src = std::fs::read_to_string(&path)
+                .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+            let Some(root) = yaml::parse(&src, &path).map_err(|e| e.to_string())? else {
+                continue;
+            };
+            let shared: Arc<Path> = Arc::from(path.as_path());
+            let Some(entries) = root.as_map() else {
+                return Err(format!(
+                    "{}: expected a mapping at the top level",
+                    path.display()
+                ));
+            };
+            tree.file_locales.insert(
+                path.clone(),
+                entries
+                    .iter()
+                    .filter_map(|(k, _)| k.as_str().map(str::to_string))
+                    .collect(),
+            );
+            // Each file maps locale to data. Only the locale being read is kept.
+            for (k, v) in entries {
+                if k.as_str() != Some(locale) {
+                    continue;
+                }
+                flatten(v, &mut Vec::new(), &shared, &path, &mut tree, warnings)?;
+            }
+        }
+    }
+    tree.finish();
+    Ok(tree)
+}
+
+fn flatten(
+    node: &Node,
+    prefix: &mut Vec<String>,
+    file: &Arc<Path>,
+    path: &Path,
+    out: &mut LocaleTree,
+    warnings: &mut Vec<String>,
+) -> Result<(), String> {
+    match node {
+        Node::Map { entries, .. } => {
+            for (k, v) in entries {
+                // ref: file_system_base.rb#filter_nil_keys!
+                if yaml::is_null_scalar(k) {
+                    warnings.push(format!(
+                        "{}:{}: skipping a nil key under `{}`. The unquoted YAML keys \
+                         null, Null, NULL and ~ all produce a nil key, which i18n does not \
+                         support.",
+                        path.display(),
+                        k.line(),
+                        prefix.join(".")
+                    ));
+                    continue;
+                }
+                let Some(name) = k.as_str() else {
+                    return Err(format!(
+                        "{}:{}: non-scalar YAML key",
+                        path.display(),
+                        k.line()
+                    ));
+                };
+                prefix.push(name.to_string());
+                flatten(v, prefix, file, path, out, warnings)?;
+                prefix.pop();
+            }
+            Ok(())
+        }
+        _ => {
+            if prefix.is_empty() {
+                return Ok(());
+            }
+            out.insert(Leaf {
+                key: prefix.join("."),
+                value: to_value(node, path, false)?,
+                depth: prefix.len() as u16,
+                path: Arc::clone(file),
+                odd_segments: prefix.iter().any(|s| s.contains('.')).then(|| {
+                    prefix
+                        .iter()
+                        .map(|s| s.as_str().into())
+                        .collect::<Vec<Box<str>>>()
+                        .into_boxed_slice()
+                }),
+            });
+            Ok(())
+        }
+    }
+}
+
+/// `in_sequence` marks a scalar that lives inside a YAML sequence. The gem's
+/// `reference?` tests a leaf node's own value (`data/tree/node.rb`), and a
+/// sequence's leaf value is an Array, never a Symbol. So a Symbol inside a
+/// sequence — Rails writes `date.order: [:day, :month, :year]` — is data, not a
+/// reference, and must be preserved rather than rejected.
+fn to_value(node: &Node, path: &Path, in_sequence: bool) -> Result<Value, String> {
+    match node {
+        Node::Seq { items, .. } => {
+            let mut out = Vec::with_capacity(items.len());
+            for i in items {
+                out.push(to_value(i, path, true)?);
+            }
+            Ok(Value::Seq(out))
+        }
+        // Only reachable under a sequence, because `flatten` walks into every
+        // mapping it meets on the way down.
+        Node::Map { entries, .. } => {
+            let mut out = Vec::with_capacity(entries.len());
+            for (k, v) in entries {
+                let Some(name) = k.as_str() else {
+                    return Err(format!(
+                        "{}:{}: non-scalar YAML key",
+                        path.display(),
+                        k.line()
+                    ));
+                };
+                out.push((name.to_string(), to_value(v, path, in_sequence)?));
+            }
+            Ok(Value::Map(out))
+        }
+        Node::Scalar { value, .. } => {
+            if !node.is_plain() {
+                return Ok(Value::Str(value.clone()));
+            }
+            // A Symbol inside a sequence keeps its written form, so the emitter
+            // can write it back unquoted and Psych still reads a Symbol.
+            if in_sequence && is_symbol_reference(value) {
+                return Ok(Value::Plain(value.clone()));
+            }
+            // Blocker B4: Psych turns `:foo.bar` into a Ruby Symbol, which the
+            // gem uses as a reference key. The reference subsystem is dropped,
+            // so a reference must not pass silently.
+            if is_symbol_reference(value) {
+                return Err(format!(
+                    "{}:{}: `{}` is a reference value. Psych reads it as a Ruby Symbol, \
+                     and the reference subsystem is out of scope. Write the value out, \
+                     or quote it if a literal string was meant.",
+                    path.display(),
+                    node.line(),
+                    value
+                ));
+            }
+            Ok(match value.as_str() {
+                "" | "~" | "null" | "Null" | "NULL" => Value::Nil,
+                "true" | "True" | "TRUE" => Value::Bool(true),
+                "false" | "False" | "FALSE" => Value::Bool(false),
+                other if is_numberish(other) => Value::Plain(other.to_string()),
+                other => Value::Str(other.to_string()),
+            })
+        }
+    }
+}
+
+/// Blocker B4: error on any value matching `^:[\w.]+$`.
+fn is_symbol_reference(value: &str) -> bool {
+    let Some(rest) = value.strip_prefix(':') else {
+        return false;
+    };
+    !rest.is_empty()
+        && rest
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '_' || c == '.')
+}
+
+fn is_numberish(s: &str) -> bool {
+    let t = s.strip_prefix(['-', '+']).unwrap_or(s);
+    !t.is_empty() && t.starts_with(|c: char| c.is_ascii_digit()) && s.parse::<f64>().is_ok()
+}
+
+/// Expands a glob relative to `root`. Only `*` and `**` are supported, which is
+/// all the gem's `Dir.glob` patterns use.
+fn glob_paths(root: &Path, pattern: &str) -> Vec<PathBuf> {
+    let pattern = pattern.replace('\\', "/");
+    let parts: Vec<&str> = pattern.split('/').filter(|p| !p.is_empty()).collect();
+    let mut current = vec![root.to_path_buf()];
+    for (i, part) in parts.iter().enumerate() {
+        let last = i + 1 == parts.len();
+        let mut next = Vec::new();
+        if *part == "**" {
+            for dir in &current {
+                collect_dirs(dir, &mut next);
+            }
+        } else if part.contains('*') {
+            let glob = globset::Glob::new(part).ok().map(|g| g.compile_matcher());
+            for dir in &current {
+                let Ok(entries) = std::fs::read_dir(dir) else {
+                    continue;
+                };
+                for e in entries.filter_map(Result::ok) {
+                    let name = e.file_name();
+                    let name = name.to_string_lossy();
+                    if !glob.as_ref().is_some_and(|g| g.is_match(name.as_ref())) {
+                        continue;
+                    }
+                    let p = e.path();
+                    if last == p.is_file() {
+                        next.push(p);
+                    }
+                }
+            }
+        } else {
+            for dir in &current {
+                let p = dir.join(part);
+                if p.exists() && last == p.is_file() {
+                    next.push(p);
+                }
+            }
+        }
+        current = next;
+        if current.is_empty() {
+            break;
+        }
+    }
+    current.sort();
+    current.dedup();
+    current
+}
+
+fn collect_dirs(dir: &Path, out: &mut Vec<PathBuf>) {
+    out.push(dir.to_path_buf());
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for e in entries.filter_map(Result::ok) {
+        if e.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+            collect_dirs(&e.path(), out);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn value_to_display_string_matches_ruby_to_s() {
+        assert_eq!(Value::Nil.to_display_string(), "");
+        assert_eq!(Value::Bool(true).to_display_string(), "true");
+        assert_eq!(Value::Plain("1.5".into()).to_display_string(), "1.5");
+        assert_eq!(
+            Value::Seq(vec![Value::Str("a".into()), Value::Plain("2".into())]).to_display_string(),
+            "[\"a\", 2]"
+        );
+    }
+
+    #[test]
+    fn detects_symbol_references() {
+        assert!(is_symbol_reference(":other.key"));
+        assert!(is_symbol_reference(":other"));
+        assert!(!is_symbol_reference(":"));
+        assert!(!is_symbol_reference("plain"));
+        assert!(!is_symbol_reference(":has spaces"));
+    }
+
+    #[test]
+    fn locale_list_puts_base_first() {
+        assert_eq!(
+            normalize_locale_list(&["fr".into(), "de".into(), "en".into()], "de"),
+            vec!["de", "en", "fr"]
+        );
+    }
+
+    fn locale_of(pattern: &str, path: &str) -> Option<String> {
+        extract_locale(&locale_pattern_re(pattern).expect("pattern compiles"), path)
+    }
+
+    /// ref: spec/file_system_data_spec.rb `#available_locales`. The three read
+    /// patterns there see three different sets of the same three files, and the
+    /// whole difference is in what the anchored regex accepts.
+    #[test]
+    fn the_read_pattern_decides_which_files_name_a_locale() {
+        let files = [
+            "config/locales/en.yml",
+            "config/locales/es.yml",
+            "config/locales/other.fr.yml",
+        ];
+        let names = |pattern: &str| -> Vec<String> {
+            files.iter().filter_map(|f| locale_of(pattern, f)).collect()
+        };
+        // "default pattern" -> en, es. `other.fr` holds a dot, and `([^/.]+)`
+        // cannot match it, even though the `*.yml` glob reached the file.
+        assert_eq!(names("config/locales/%{locale}.yml"), vec!["en", "es"]);
+        // "more inclusive pattern" -> en, es, fr.
+        assert_eq!(
+            names("config/locales/*%{locale}.yml"),
+            vec!["en", "es", "fr"]
+        );
+        // "another pattern" -> fr only.
+        assert_eq!(names("config/locales/*.%{locale}.yml"), vec!["fr"]);
+    }
+
+    #[test]
+    fn extracts_locale_from_path() {
+        assert_eq!(
+            locale_of(
+                "config/locales/base.%{locale}.yml",
+                "config/locales/base.de.yml"
+            ),
+            Some("de".into())
+        );
+        assert_eq!(
+            locale_of(
+                "config/locales/*.%{locale}.yml",
+                "config/locales/jobs.fr.yml"
+            ),
+            Some("fr".into())
+        );
+        assert_eq!(
+            locale_of("config/locales/%{locale}.yml", "config/locales/de.yml"),
+            Some("de".into())
+        );
+        // `**` crosses directories, a single `*` does not.
+        assert_eq!(
+            locale_of(
+                "config/locales/**/%{locale}.yml",
+                "config/locales/a/b/de.yml"
+            ),
+            Some("de".into())
+        );
+        assert_eq!(
+            locale_of(
+                "config/locales/*/%{locale}.yml",
+                "config/locales/a/b/de.yml"
+            ),
+            None
+        );
+        // A locale segment inside the path, not in the file name.
+        assert_eq!(
+            locale_of(
+                "config/locales/%{locale}/models.yml",
+                "config/locales/de/models.yml"
+            ),
+            Some("de".into())
+        );
+    }
+
+    #[test]
+    fn extract_locale_rejects_what_cannot_be_a_locale() {
+        // The extension has to match.
+        assert_eq!(
+            locale_of("config/locales/%{locale}.yml", "config/locales/de.json"),
+            None
+        );
+        // The literal part of the pattern has to be there.
+        assert_eq!(
+            locale_of("config/locales/%{locale}.yml", "other/de.yml"),
+            None
+        );
+        // `+` needs at least one character.
+        assert_eq!(
+            locale_of("config/locales/%{locale}.yml", "config/locales/.yml"),
+            None
+        );
+        // Nothing may follow the pattern.
+        assert_eq!(
+            locale_of("config/locales/%{locale}.yml", "config/locales/de.yml.bak"),
+            None
+        );
+    }
+
+    /// A read pattern the gem's escaping cannot express as a regex is skipped
+    /// rather than crashing the locale scan.
+    #[test]
+    fn an_uncompilable_read_pattern_is_skipped() {
+        assert!(locale_pattern_re("config/locales/%{locale}.yml").is_some());
+        assert!(locale_pattern_re("config/locales/[%{locale}.yml").is_none());
+    }
+
+    /// The `Value` display forms feed the `Base value` column of the reports,
+    /// so they follow Ruby `to_s`: a String is bare, a collection is inspected.
+    #[test]
+    fn collection_values_use_the_ruby_inspect_form() {
+        assert_eq!(Value::Str("a".into()).to_display_string(), "a");
+        assert_eq!(
+            Value::Seq(vec![Value::Nil, Value::Bool(false)]).to_display_string(),
+            "[nil, false]"
+        );
+        // Ruby 3.4 writes `{"a" => "b"}`, with spaces around the arrow.
+        assert_eq!(
+            Value::Map(vec![
+                ("a".into(), Value::Str("b".into())),
+                ("n".into(), Value::Plain("1".into())),
+            ])
+            .to_display_string(),
+            "{\"a\" => \"b\", \"n\" => 1}"
+        );
+        // A nested collection inspects all the way down.
+        assert_eq!(
+            Value::Seq(vec![Value::Map(vec![(
+                "k".into(),
+                Value::Seq(vec![Value::Str("v".into())])
+            )])])
+            .to_display_string(),
+            "[{\"k\" => [\"v\"]}]"
+        );
+    }
+
+    #[test]
+    fn as_str_is_only_for_scalars() {
+        assert_eq!(Value::Str("a".into()).as_str(), Some("a"));
+        assert_eq!(Value::Plain("1".into()).as_str(), Some("1"));
+        assert_eq!(Value::Nil.as_str(), None);
+        assert_eq!(Value::Bool(true).as_str(), None);
+        assert_eq!(Value::Seq(Vec::new()).as_str(), None);
+        assert_eq!(Value::Map(Vec::new()).as_str(), None);
+    }
+
+    /// ref: locale_list.rb#normalize_locale_list, called with `add_base = true`,
+    /// so the base locale is prepended whether or not the list held it.
+    #[test]
+    fn locale_list_keeps_the_base_first_even_when_absent_from_the_list() {
+        assert_eq!(
+            normalize_locale_list(&["fr".into(), "de".into()], "en"),
+            vec!["en", "de", "fr"]
+        );
+        // Duplicates collapse.
+        assert_eq!(
+            normalize_locale_list(&["en".into(), "en".into(), "de".into()], "en"),
+            vec!["en", "de"]
+        );
+    }
+}

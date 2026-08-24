@@ -1,0 +1,75 @@
+---
+en:
+  booleans:
+    'no': two
+    'on': three
+    'true': one
+    'yes': four
+  deep:
+    a:
+      b:
+        c:
+          d:
+            e:
+              f:
+                g:
+                  h:
+                    i:
+                      j: deep
+  emoji:
+    leading: "😀 hello"
+    trailing: hello 😀
+  multiline:
+    folded: |
+      hello world
+      newline
+    folded_keep: |
+      hello world
+      newline
+    folded_strip: |-
+      hello world
+      newline
+    literal: |
+      hello
+      world
+
+      newline
+    literal_keep: |+
+      hello
+      world
+
+    literal_strip: |-
+      hello
+      world
+  nil_value:
+  numeric:
+    '007': oh seven
+    '1': one
+    '2.5': two and a half
+    '2020-01-01': a date
+  quoting:
+    apostrophe: it's here
+    colon: 'a: b'
+    dash: "-dash"
+    empty: ''
+    hash: 'a #b'
+    indicator_with_quote: '#a "b"'
+    interpolation: "%{count} items"
+    leading_space: " lead"
+    non_word_first: "« quoted »"
+    non_word_first_with_quote: <a href="%{url}">link</a>
+    quotes: he said "hi"
+    tab: "a\tb"
+    trailing_space: 'trail '
+  sequences:
+    empty_seq: []
+    order:
+    - :day
+    - :month
+    - :year
+    people:
+    - name: Ada
+      age: 36
+    - name: Alan
+      age: 41
+  zz_last: sorts last

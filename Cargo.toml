@@ -1,0 +1,37 @@
+[package]
+name = "i18n-tasks-rs"
+version = "0.1.0"
+edition = "2024"
+description = "A Rust port of the i18n-tasks gem: find missing and unused translations in a Rails project"
+license = "MIT"
+readme = "README.md"
+keywords = ["i18n", "rails", "translations", "yaml"]
+categories = ["command-line-utilities", "development-tools"]
+
+[dependencies]
+aho-corasick = "1.1.5"
+anyhow = "1.0.104"
+clap = { version = "4.6.6", features = ["derive"] }
+fancy-regex = "0.19.0"
+globset = "0.4.20"
+ignore = "0.4.33"
+rayon = "1.12.0"
+regex = "1.13.1"
+ruby-prism = "1.9.0"
+saphyr-parser = "0.0.12"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+similar = { version = "3.2.0", features = ["text"] }
+smallvec = "1.15.2"
+
+[lib]
+name = "i18n_tasks_rs"
+path = "src/lib.rs"
+
+[[bin]]
+name = "i18n-tasks-rs"
+path = "src/main.rs"
+
+[profile.release]
+lto = true
+codegen-units = 1
