@@ -574,3 +574,23 @@ still suppresses a report row. This command builds the reports with all ignore
 rules disabled and removes rules that match no row. It prints a diff by default
 and writes only with `--write`. The edit keeps the config text and comments,
 except for comments attached directly to a removed list item.
+
+---
+
+## 28. A closed stdout ends the output quietly — bug fix
+
+**Gem.** Ruby ignores `SIGPIPE` and raises `Errno::EPIPE` on the write, so
+`i18n-tasks unused | head` ends with a backtrace on stderr.
+
+**Here.** Rust does the same thing one step worse: `println!` panics on the
+failed write, so `i18n-tasks-rs unused -l fr | more` and then `q` printed
+`failed printing to stdout: Broken pipe` and exited 101.
+
+A reader that quits early is not a tool failure. Every CLI write now goes
+through `write_out`/`write_err` in `src/main.rs`, which drops the output on
+`ErrorKind::BrokenPipe` and leaves the exit code alone, so `unused | head`
+still exits 1 and `unused` on a clean project still exits 0. Restoring the
+default `SIGPIPE` handler instead would need `libc` and an `unsafe` block, and
+the crate sets `unsafe_code = "forbid"`.
+
+Covered by `tests/broken_pipe.rs`.

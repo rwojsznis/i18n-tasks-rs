@@ -23,6 +23,56 @@ use serde::{Serialize, Serializer};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+/// Every write the CLI makes, with a closed pipe treated as the end of the run.
+///
+/// `println!` panics when the write fails, and a reader that quits early
+/// (`i18n-tasks-rs unused | head`, or `| more` and then `q`) closes the pipe
+/// under the writer. Rust ignores `SIGPIPE`, so that write comes back as
+/// `ErrorKind::BrokenPipe` rather than killing the process, and restoring the
+/// default handler needs `libc` and an `unsafe` block the crate forbids. So the
+/// output goes through here instead: a closed pipe ends the output quietly and
+/// leaves the exit code alone, and `unused | head` still says 1.
+fn write_out(args: std::fmt::Arguments) {
+    write_to(&mut std::io::stdout().lock(), args, "stdout");
+}
+
+fn write_err(args: std::fmt::Arguments) {
+    write_to(&mut std::io::stderr().lock(), args, "stderr");
+}
+
+fn write_to(w: &mut impl std::io::Write, args: std::fmt::Arguments, name: &str) {
+    match w.write_fmt(args) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => {}
+        // A full disk, say. Say so once, on the other stream, and carry on.
+        Err(e) => {
+            let _ = std::io::Write::write_fmt(
+                &mut std::io::stderr(),
+                format_args!("i18n-tasks-rs: cannot write to {name}: {e}\n"),
+            );
+        }
+    }
+}
+
+/// `print!`, `println!`, `eprint!` and `eprintln!`, routed through `write_out`
+/// and `write_err`. The CLI uses these four and never the standard ones.
+macro_rules! out {
+    ($($arg:tt)*) => { crate::write_out(format_args!($($arg)*)) };
+}
+
+macro_rules! outln {
+    () => { crate::write_out(format_args!("\n")) };
+    ($($arg:tt)*) => { crate::write_out(format_args!("{}\n", format_args!($($arg)*))) };
+}
+
+macro_rules! err {
+    ($($arg:tt)*) => { crate::write_err(format_args!($($arg)*)) };
+}
+
+macro_rules! errln {
+    ($($arg:tt)*) => { crate::write_err(format_args!("{}\n", format_args!($($arg)*))) };
+}
+
 const EXIT_OK: u8 = 0;
 const EXIT_FOUND: u8 = 1;
 const EXIT_FAILURE: u8 = 2;
@@ -418,7 +468,7 @@ fn main() -> ExitCode {
     match run() {
         Ok(code) => ExitCode::from(code),
         Err(message) => {
-            eprintln!("i18n-tasks-rs: {message}");
+            errln!("i18n-tasks-rs: {message}");
             ExitCode::from(EXIT_FAILURE)
         }
     }
@@ -438,7 +488,7 @@ impl Session {
         let cfg = Config::load(&common.config, common.root.as_deref())?;
         let store = Store::load(&cfg)?;
         for warning in &store.warnings {
-            eprintln!("warning: {warning}");
+            errln!("warning: {warning}");
         }
         let locales = resolve_locales(&common.requested_locales(), &store)?;
         Ok(Session {
@@ -583,7 +633,7 @@ fn clean_config_command(common: &Common, write: bool) -> Result<u8, String> {
         &common.config,
     )?;
     if session.json {
-        println!(
+        outln!(
             "{}",
             serde_json::to_string_pretty(&serde_json::json!({
                 "check": "clean_config",
@@ -595,7 +645,7 @@ fn clean_config_command(common: &Common, write: bool) -> Result<u8, String> {
             .map_err(|e| e.to_string())?
         );
     } else {
-        print!("{}", report.diff());
+        out!("{}", report.diff());
     }
     if report.is_clean() {
         return Ok(EXIT_OK);
@@ -606,7 +656,7 @@ fn clean_config_command(common: &Common, write: bool) -> Result<u8, String> {
         Ok(EXIT_OK)
     } else {
         if !session.json {
-            println!("Nothing was written. Pass `--write` to apply.");
+            outln!("Nothing was written. Pass `--write` to apply.");
         }
         Ok(EXIT_FOUND)
     }
@@ -622,9 +672,9 @@ fn init_config(flags: &InitFlags) -> Result<u8, String> {
     if flags.write {
         write_config(&to, &generated.output, flags.force)?;
     } else {
-        print!("{}", generated.output);
+        out!("{}", generated.output);
     }
-    eprint!("{}", init::to_text(&generated, &to, flags.write));
+    err!("{}", init::to_text(&generated, &to, flags.write));
     Ok(if generated.needs_attention() {
         EXIT_FOUND
     } else {
@@ -663,9 +713,9 @@ fn migrate_config(flags: &MigrateFlags) -> Result<u8, String> {
     if flags.write {
         write_config(&to, &migration.output, flags.force)?;
     } else {
-        print!("{}", migration.output);
+        out!("{}", migration.output);
     }
-    eprint!("{}", migrate::to_text(&migration, &from, &to, flags.write));
+    err!("{}", migrate::to_text(&migration, &from, &to, flags.write));
     Ok(if migration.needs_attention() {
         EXIT_FOUND
     } else {
@@ -694,12 +744,12 @@ fn emit(session: &Session, check: &Check) -> Result<u8, String> {
             locales: &session.locales,
             report: check,
         };
-        println!(
+        outln!(
             "{}",
             serde_json::to_string_pretty(&env).map_err(|e| e.to_string())?
         );
     } else {
-        print!("{}", check.to_text());
+        out!("{}", check.to_text());
     }
     Ok(if outcome == Outcome::Clean {
         EXIT_OK
@@ -739,7 +789,7 @@ fn health(common: &Common) -> Result<u8, String> {
     let found = checks.iter().any(|c| c.outcome() == Outcome::Found);
 
     if s.json {
-        println!(
+        outln!(
             "{}",
             serde_json::to_string_pretty(&Health {
                 passed: !found,
@@ -751,10 +801,10 @@ fn health(common: &Common) -> Result<u8, String> {
             .map_err(|e| e.to_string())?
         );
     } else {
-        println!("{}", stats.to_text());
+        outln!("{}", stats.to_text());
         for check in &checks {
-            println!();
-            print!("{}", check.to_text());
+            outln!();
+            out!("{}", check.to_text());
         }
     }
     Ok(if found { EXIT_FOUND } else { EXIT_OK })
@@ -800,13 +850,13 @@ fn normalize_command(s: &Session, flags: &NormalizeFlags) -> Result<u8, String> 
     let deletions = report.deletions();
     // Always print the deletion list, whether or not the run may act on it.
     if !deletions.is_empty() {
-        eprintln!("{} file(s) end up with no keys:", deletions.len());
+        errln!("{} file(s) end up with no keys:", deletions.len());
         for d in &deletions {
-            eprintln!("  {}", d.display);
+            errln!("  {}", d.display);
         }
     }
     if s.json {
-        println!(
+        outln!(
             "{}",
             serde_json::to_string_pretty(&serde_json::json!({
                 "check": "normalize",
@@ -819,11 +869,11 @@ fn normalize_command(s: &Session, flags: &NormalizeFlags) -> Result<u8, String> 
             .map_err(|e| e.to_string())?
         );
     } else {
-        print!("{}", report.to_normalize_text(flags.dry_run));
+        out!("{}", report.to_normalize_text(flags.dry_run));
     }
     if !flags.write {
         if !s.json {
-            println!("Nothing was written. Pass `--write` to apply, `--dry-run` to see the diff.");
+            outln!("Nothing was written. Pass `--write` to apply, `--dry-run` to see the diff.");
         }
         return Ok(EXIT_OK);
     }
@@ -906,23 +956,23 @@ fn find_output(session: &Session, used: &UsedKeys) -> Result<u8, String> {
                 })
                 .collect(),
         };
-        println!(
+        outln!(
             "{}",
             serde_json::to_string_pretty(&out).map_err(|e| e.to_string())?
         );
     } else {
         for (key, occs) in &used.keys {
-            println!("{key}");
+            outln!("{key}");
             for o in occs {
-                println!("  {}:{}:{}", o.path.display(), o.line_num, o.line_pos);
+                outln!("  {}:{}:{}", o.path.display(), o.line_num, o.line_pos);
             }
         }
         for (pattern, occ) in &used.pattern_sources {
-            println!("{pattern}  (pattern)");
-            println!("  {}:{}", occ.path.display(), occ.line_num);
+            outln!("{pattern}  (pattern)");
+            outln!("  {}:{}", occ.path.display(), occ.line_num);
         }
         for o in &used.opaque {
-            println!("(opaque)  {}:{}", o.path.display(), o.line_num);
+            outln!("(opaque)  {}:{}", o.path.display(), o.line_num);
         }
     }
     Ok(EXIT_OK)
