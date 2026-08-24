@@ -32,7 +32,8 @@ compared over the same project.
 | `src/init.rs` | `init-config`: generates one from the project's own layout |
 | `src/migrate.rs` | `migrate-config`: converts a gem config into ours |
 | `src/pattern.rs` | the key-pattern DSL as a segment matcher (B2) |
-| `src/discover.rs` | file walk + aho-corasick prefilter |
+| `src/walk.rs` | the one directory walk; the callers pass the prune rule |
+| `src/discover.rs` | glob filters over the walk + aho-corasick prefilter |
 | `src/scan/ruby.rs` | the Prism visitor — the core |
 | `src/scan/erb.rs` | ERB tags → one Ruby buffer per file, plus a source map |
 | `src/scan/template.rs` | Slim, JS, TS and everything else, by regex |

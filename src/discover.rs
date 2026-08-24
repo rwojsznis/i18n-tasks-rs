@@ -3,6 +3,7 @@
 //! ref: lib/i18n/tasks/scanners/files/file_finder.rb:34-50
 
 use crate::config::{ALWAYS_EXCLUDE, Config};
+use crate::walk::{Descend, walk};
 use aho_corasick::AhoCorasick;
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use std::path::{Path, PathBuf};
@@ -113,30 +114,22 @@ impl Finder {
     }
 
     fn walk(&self, dir: &Path, out: &mut Vec<PathBuf>) {
-        let Ok(entries) = std::fs::read_dir(dir) else {
-            return;
-        };
-        let mut entries: Vec<_> = entries.filter_map(Result::ok).collect();
-        entries.sort_by_key(std::fs::DirEntry::path);
-        for entry in entries {
-            let path = entry.path();
-            let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
-                continue;
-            };
-            let hidden = name.starts_with('.');
-            let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
-            let rel = self.match_path(&path);
-            let excluded = self.exclude.is_match(rel.as_str());
-            if is_dir {
-                // The gem prunes a directory that is hidden or excluded, and
-                // descends into every other one.
-                if !hidden && !excluded {
-                    self.walk(&path, out);
-                }
-            } else if !hidden && !excluded {
-                self.consider(path, out);
+        walk(dir, &mut |path, is_dir| {
+            // The gem prunes a directory that is hidden or excluded, and
+            // drops a file by the same two rules.
+            let hidden = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_none_or(|n| n.starts_with('.'));
+            if hidden || self.exclude.is_match(self.match_path(path).as_str()) {
+                return Descend::No;
             }
-        }
+            if is_dir {
+                return Descend::Yes;
+            }
+            self.consider(path.to_path_buf(), out);
+            Descend::No
+        });
     }
 
     /// The include/exclude decision for one file, shared by the walk and by a

@@ -6,6 +6,7 @@
 //! than no config at all, because the reports look clean.
 
 use i18n_tasks_rs::config::Config;
+use i18n_tasks_rs::data::load::Store;
 use i18n_tasks_rs::init;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -302,4 +303,37 @@ fn the_missing_config_error_points_at_init() {
     let text = String::from_utf8_lossy(&out.stderr);
     assert!(text.contains("init-config"), "{text}");
     let _ = std::fs::remove_dir_all(&root);
+}
+
+/// The three directory walks in this crate disagreed about symlinks: the one in
+/// `init` skipped every one of them, while the glob expansion in `data::load`
+/// follows them, because `Path::is_file` does. So a symlinked locale file was
+/// invisible to detection — its locale absent from the generated `locales:`,
+/// and the file absent from `files_seen` — although the loader reads it as
+/// happily as any other file once a pattern names it.
+///
+/// `Dir.glob` in the gem follows a symlinked file too, so this is the walk
+/// that was wrong.
+#[cfg(unix)]
+#[test]
+fn a_symlinked_locale_file_is_detected_like_a_real_one() {
+    let s = Sandbox::new("symlink");
+    std::fs::create_dir_all(s.root.join("vendor")).unwrap();
+    std::fs::write(s.root.join("vendor/de.yml"), "---\nde:\n  a: A\n").unwrap();
+    std::os::unix::fs::symlink(
+        s.root.join("vendor/de.yml"),
+        s.root.join("config/locales/de.yml"),
+    )
+    .unwrap();
+
+    let g = init::generate(&s.root, Path::new(TARGET)).expect("init succeeds");
+    assert_eq!(g.detected.files_seen, 2);
+    assert_eq!(g.detected.locales, ["de", "en"]);
+
+    // And the generated config reads both, which is the disagreement: the
+    // loader was always able to follow the link.
+    let cfg = Config::parse(&g.output, Path::new(TARGET), s.root.clone()).expect("output loads");
+    let store = Store::load(&cfg).expect("data loads");
+    assert!(store.key_value("de", "a"), "de.a");
+    assert!(store.key_value("en", "a"), "en.a");
 }

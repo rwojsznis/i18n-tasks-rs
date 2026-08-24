@@ -28,6 +28,7 @@
 use crate::config::{Config, DEFAULT_RELATIVE_ROOTS, interpolate_locale};
 use crate::data::load::{Store, locale_for_path};
 use crate::stats::forest_stats;
+use crate::walk::{Descend, walk};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
@@ -483,7 +484,7 @@ fn relative_roots(
     for path in search_paths {
         let base = root.join(path.trim_end_matches('/'));
         let mut files = Vec::new();
-        walk(&base, &mut |p| {
+        walk_files(&base, &mut |p| {
             if p.extension()
                 .and_then(|e| e.to_str())
                 .is_some_and(|e| SOURCE_EXTS.contains(&e))
@@ -572,7 +573,7 @@ fn uses_relative_key(bytes: &[u8]) -> bool {
 fn locale_files(root: &Path, candidate: &str) -> Vec<String> {
     let dir = root.join(candidate);
     let mut out = Vec::new();
-    walk(&dir, &mut |p| {
+    walk_files(&dir, &mut |p| {
         if p.extension()
             .and_then(|e| e.to_str())
             .is_some_and(|e| e == "yml" || e == "yaml")
@@ -595,31 +596,24 @@ fn locale_files(root: &Path, candidate: &str) -> Vec<String> {
     rels
 }
 
-fn walk(dir: &Path, visit: &mut impl FnMut(&Path)) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    let mut entries: Vec<PathBuf> = entries.filter_map(Result::ok).map(|e| e.path()).collect();
-    entries.sort();
-    for path in entries {
-        let Ok(ty) = std::fs::symlink_metadata(&path) else {
-            continue;
-        };
-        if ty.file_type().is_symlink() {
-            continue;
+/// Every file under `dir`, minus the directories no project keeps its own
+/// source or data in.
+fn walk_files(dir: &Path, visit: &mut impl FnMut(&Path)) {
+    walk(dir, &mut |path, is_dir| {
+        if !is_dir {
+            visit(path);
+            return Descend::No;
         }
         let name = path
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or_default();
-        if ty.is_dir() {
-            if !SKIP_DIRS.contains(&name) {
-                walk(&path, visit);
-            }
-        } else if ty.is_file() {
-            visit(&path);
+        if SKIP_DIRS.contains(&name) {
+            Descend::No
+        } else {
+            Descend::Yes
         }
-    }
+    });
 }
 
 fn preview(items: &[String]) -> String {

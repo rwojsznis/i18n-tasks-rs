@@ -195,12 +195,13 @@ Not implemented, on purpose.
 
 ---
 
-## 4. Three behaviours the gem states only in code
+## 4. Four behaviours the gem states only in code
 
-All three were port bugs. The first two were caught by the last specs to be
+All four were port bugs. The first two were caught by the last specs to be
 ported, and neither fix changed any of the four differential reports in
-[`accepted-diffs.md`](accepted-diffs.md). The third was caught by review, not by
-a spec — the ported spec had its globs rewritten to fit the bug, so it passed.
+[`accepted-diffs.md`](accepted-diffs.md). The last two were caught by review and
+not by a spec — for the globs, the ported spec had its own globs rewritten to
+fit the bug, so it passed.
 
 They are written up here because the code that gets them right looks arbitrary
 without them.
@@ -254,6 +255,28 @@ difference 26 covers where the two part company.
 
 A path that is not under the root — an absolute `search.paths` entry — keeps its
 full form, because a glob for it has to be written that way.
+
+### A symlink is a file, and never a directory to walk into
+
+`Find.find` decides with `File.lstat`, so it yields a symlink and does not
+descend through one, whatever it points at. `Dir.glob` behind `data.read` then
+reads a symlinked locale file like any other, because its `File.file?` follows
+the link.
+
+`crate::walk` states both halves once, for all three walks over it — source
+discovery, `**` expansion under `data.read`, and `init-config`'s detection.
+An entry is a directory only when `DirEntry::file_type` says so without
+following, so a symlink is offered as a file and the walk never enters it. That
+also removes the one way a walk here could not terminate.
+
+Each of the three used to answer this for itself, and `init-config` answered it
+differently: it skipped every symlink. So a project whose `config/locales`
+holds a symlinked `fr.yml` — a vendored or generated catalog, linked in — got a
+generated config that reported one locale file too few and no `fr` among the
+locales, in the header and in the `locales:` line it writes commented out, while
+the loader that same config feeds read the file all along. Detection has to see
+what the loader sees, and `a_symlinked_locale_file_is_detected_like_a_real_one`
+in `tests/init_config.rs` pins it.
 
 ---
 
