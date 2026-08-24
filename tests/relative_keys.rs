@@ -183,3 +183,23 @@ fn a_foreign_receiver_is_skipped() {
     let src = "class UsersController < ApplicationController\n  def create\n    Service.translate(:what)\n  end\nend\n";
     assert!(keys(src, "app/controllers/users_controller.rb", &c).is_empty());
 }
+
+#[test]
+fn a_class_or_module_body_does_not_resolve_relative_keys() {
+    // ref: nodes.rb TranslationCall#support_relative_keys?, which requires the
+    // parent to be a `ParsedMethod` or the `Root`. A controller class supports
+    // relative keys, but only for the calls inside its methods: one in the
+    // class body itself has no method to resolve against, so it drops.
+    let c = cfg(&["app/controllers"], &[]);
+    let src = "class UsersController < ApplicationController\n  t('.body')\n  t('absolute.key')\n  def create\n    t('.success')\n  end\nend\n";
+    assert_eq!(
+        keys(src, "app/controllers/users_controller.rb", &c),
+        vec!["absolute.key", "users.create.success"]
+    );
+    // The same in a module body, which never supports relative keys at all.
+    let src = "module Helpers\n  t('.body')\n  t('absolute.key')\nend\n";
+    assert_eq!(
+        keys(src, "app/controllers/helpers.rb", &c),
+        vec!["absolute.key"]
+    );
+}
