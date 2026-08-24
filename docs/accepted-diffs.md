@@ -575,6 +575,14 @@ rules disabled and removes rules that match no row. It prints a diff by default
 and writes only with `--write`. The edit keeps the config text and comments,
 except for comments attached directly to a removed list item.
 
+The edit is line-wise, so a rule that shares its line with a rule that stays
+(`ignore_unused: ["bye", "zzz.*"]`, flow style) cannot go without taking its
+neighbour. Such a rule is reported as one a human has to remove, the line stays,
+and the command exits 1 even with `--write`. `migrate-config` refuses a
+flow-style section for the same reason. Re-emitting the list is the other
+answer, and it would lose the quoting and the formatting the command preserves
+everywhere else.
+
 ---
 
 ## 28. A closed stdout ends the output quietly — bug fix

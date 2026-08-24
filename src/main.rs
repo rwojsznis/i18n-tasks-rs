@@ -637,7 +637,7 @@ fn clean_config_command(common: &Common, write: bool) -> Result<u8, String> {
             "{}",
             serde_json::to_string_pretty(&serde_json::json!({
                 "check": "clean_config",
-                "written": write && !report.is_clean(),
+                "written": write && report.has_edit(),
                 "config_digest": session.cfg.digest,
                 "locales": session.locales,
                 "stale_rules": report.stale_rules,
@@ -646,16 +646,25 @@ fn clean_config_command(common: &Common, write: bool) -> Result<u8, String> {
         );
     } else {
         out!("{}", report.diff());
+        out!("{}", report.manual_note());
     }
     if report.is_clean() {
         return Ok(EXIT_OK);
     }
     if write {
-        std::fs::write(&common.config, &report.cleaned)
-            .map_err(|e| format!("cannot write {}: {e}", common.config.display()))?;
-        Ok(EXIT_OK)
+        if report.has_edit() {
+            std::fs::write(&common.config, &report.cleaned)
+                .map_err(|e| format!("cannot write {}: {e}", common.config.display()))?;
+        }
+        // A rule that only a human can remove leaves the config unclean, so
+        // the run still reports a finding.
+        Ok(if report.has_manual() {
+            EXIT_FOUND
+        } else {
+            EXIT_OK
+        })
     } else {
-        if !session.json {
+        if !session.json && report.has_edit() {
             outln!("Nothing was written. Pass `--write` to apply.");
         }
         Ok(EXIT_FOUND)

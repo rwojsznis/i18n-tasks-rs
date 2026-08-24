@@ -26,6 +26,9 @@ pub struct StaleRule {
     pub setting: String,
     pub pattern: String,
     pub line: usize,
+    /// True when the write cannot remove this rule: it shares its line with a
+    /// rule that stays, so only a human can take it out. See `removal_plan`.
+    pub manual: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -73,9 +76,10 @@ pub fn plan(
     let eq_rows = eq_base::report(&bare, store, locales).rows;
     let interpolation_rows = interpolations::inconsistent(&bare, store, locales).rows;
 
-    let stale: Vec<&Rule> = rules
+    let stale: Vec<usize> = rules
         .iter()
-        .filter(|rule| {
+        .enumerate()
+        .filter(|(_, rule)| {
             let pattern = PatternSet::new(std::slice::from_ref(&rule.pattern));
             let matches = |rows: &[crate::report::KeyRow]| {
                 rows.iter().any(|row| {
@@ -96,27 +100,21 @@ pub fn plan(
                 Kind::Interpolations => matches(&interpolation_rows),
             }
         })
+        .map(|(index, _)| index)
         .collect();
-    let mut stale_lines: BTreeSet<usize> = stale.iter().map(|rule| rule.line).collect();
-    let stale_rule_lines: BTreeSet<usize> = stale.iter().map(|rule| rule.line).collect();
-    for rule in &stale {
-        for &container_line in &rule.container_lines {
-            let has_kept_rule = rules.iter().any(|candidate| {
-                candidate.container_lines.contains(&container_line)
-                    && !stale_rule_lines.contains(&candidate.line)
-            });
-            if !has_kept_rule {
-                stale_lines.insert(container_line);
-            }
-        }
-    }
+    let (stale_lines, manual) = removal_plan(&rules, &stale);
     let cleaned = remove_lines(source, &stale_lines);
     let stale_rules = stale
-        .into_iter()
-        .map(|rule| StaleRule {
-            setting: rule.setting.clone(),
-            pattern: rule.pattern.clone(),
-            line: rule.line,
+        .iter()
+        .zip(&manual)
+        .filter_map(|(&index, &manual)| {
+            let rule = rules.get(index)?;
+            Some(StaleRule {
+                setting: rule.setting.clone(),
+                pattern: rule.pattern.clone(),
+                line: rule.line,
+                manual,
+            })
         })
         .collect();
     Ok(CleanConfigReport {
@@ -125,6 +123,57 @@ pub fn plan(
         original: source.to_string(),
         display_path: path.display().to_string(),
     })
+}
+
+/// Turn the stale rules into the set of lines the write removes.
+///
+/// A rule's identity is its index, not its line. A flow-style list holds
+/// several rules on one line (`ignore_unused: ["bye", "zzz.*"]`), so removing
+/// the line of a stale rule takes its live neighbours with it — with `--write`
+/// the live rule is gone from the config. A stale rule that shares its line
+/// with a rule that stays is therefore `manual`: the line stays, and the report
+/// asks a human to remove the rule. `migrate-config` refuses a flow-style
+/// section for the same reason.
+///
+/// Returns the lines to remove, and one `manual` flag per entry of `stale`.
+fn removal_plan(rules: &[Rule], stale: &[usize]) -> (BTreeSet<usize>, Vec<bool>) {
+    let stale_set: BTreeSet<usize> = stale.iter().copied().collect();
+    let kept_lines: BTreeSet<usize> = rules
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| !stale_set.contains(index))
+        .map(|(_, rule)| rule.line)
+        .collect();
+    let manual: Vec<bool> = stale
+        .iter()
+        .map(|index| {
+            rules
+                .get(*index)
+                .is_some_and(|rule| kept_lines.contains(&rule.line))
+        })
+        .collect();
+    let removed: BTreeSet<usize> = stale
+        .iter()
+        .zip(&manual)
+        .filter(|(_, manual)| !**manual)
+        .map(|(&index, _)| index)
+        .collect();
+    let mut lines: BTreeSet<usize> = removed
+        .iter()
+        .filter_map(|index| rules.get(*index))
+        .map(|rule| rule.line)
+        .collect();
+    for rule in removed.iter().filter_map(|index| rules.get(*index)) {
+        for &container_line in &rule.container_lines {
+            let has_kept_rule = rules.iter().enumerate().any(|(index, candidate)| {
+                candidate.container_lines.contains(&container_line) && !removed.contains(&index)
+            });
+            if !has_kept_rule {
+                lines.insert(container_line);
+            }
+        }
+    }
+    (lines, manual)
 }
 
 fn locale_applies(group: Option<&[String]>, locale: &str) -> bool {
@@ -235,13 +284,118 @@ impl CleanConfigReport {
         self.stale_rules.is_empty()
     }
 
+    /// True when `--write` changes the file. False when every stale rule is
+    /// `manual`, because then the cleaned text is the original text.
+    pub fn has_edit(&self) -> bool {
+        self.cleaned != self.original
+    }
+
+    pub fn has_manual(&self) -> bool {
+        self.stale_rules.iter().any(|rule| rule.manual)
+    }
+
+    /// The stale rules the write leaves in place, and what to do about them.
+    /// Empty when there are none.
+    pub fn manual_note(&self) -> String {
+        let manual: Vec<&StaleRule> = self.stale_rules.iter().filter(|rule| rule.manual).collect();
+        if manual.is_empty() {
+            return String::new();
+        }
+        let (noun, verb, pronoun) = if manual.len() == 1 {
+            ("rule", "shares", "it")
+        } else {
+            ("rules", "share", "them")
+        };
+        let mut note = format!(
+            "{} stale {noun} {verb} a line with a rule that is still in use \
+             (flow style, `[a, b]`):\n",
+            manual.len(),
+        );
+        for rule in manual {
+            note.push_str(&format!(
+                "  {}:{}: `{}` rule `{}`\n",
+                self.display_path, rule.line, rule.setting, rule.pattern
+            ));
+        }
+        note.push_str(&format!(
+            "Remove {pronoun} by hand, or rewrite the list as an indented block \
+             and run this again.\n"
+        ));
+        note
+    }
+
     pub fn diff(&self) -> String {
         if self.is_clean() {
             return "Config ignore rules are clean\n".to_string();
+        }
+        if !self.has_edit() {
+            return String::new();
         }
         similar::TextDiff::from_lines(&self.original, &self.cleaned)
             .unified_diff()
             .header(&self.display_path, &self.display_path)
             .to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Kind, Rule, removal_plan};
+    use std::collections::BTreeSet;
+
+    fn rule(pattern: &str, line: usize, container_lines: &[usize]) -> Rule {
+        Rule {
+            setting: "ignore_unused".to_string(),
+            pattern: pattern.to_string(),
+            line,
+            locales: None,
+            kind: Kind::Unused,
+            container_lines: container_lines.to_vec(),
+        }
+    }
+
+    /// `ignore_unused:` on line 1, `- bye` on 2 and `- zzz.*` on 3.
+    #[test]
+    fn a_block_list_removes_the_line_of_the_stale_rule_only() {
+        let rules = [rule("bye", 2, &[1]), rule("zzz.*", 3, &[1])];
+        let (lines, manual) = removal_plan(&rules, &[1]);
+        assert_eq!(lines, BTreeSet::from([3]));
+        assert_eq!(manual, vec![false]);
+    }
+
+    /// The setting itself goes once its last rule does.
+    #[test]
+    fn a_block_list_of_only_stale_rules_takes_its_setting_with_it() {
+        let rules = [rule("yyy.*", 2, &[1]), rule("zzz.*", 3, &[1])];
+        let (lines, manual) = removal_plan(&rules, &[0, 1]);
+        assert_eq!(lines, BTreeSet::from([1, 2, 3]));
+        assert_eq!(manual, vec![false, false]);
+    }
+
+    /// `ignore_unused: ["bye", "zzz.*"]` — both rules and the setting are on
+    /// line 1, so removing the stale rule's line would delete the live `bye`.
+    #[test]
+    fn a_flow_list_with_a_live_rule_removes_nothing() {
+        let rules = [rule("bye", 1, &[1]), rule("zzz.*", 1, &[1])];
+        let (lines, manual) = removal_plan(&rules, &[1]);
+        assert!(lines.is_empty(), "{lines:?}");
+        assert_eq!(manual, vec![true]);
+    }
+
+    /// Nothing survives on the line, so the line goes as a whole.
+    #[test]
+    fn a_flow_list_of_only_stale_rules_is_removed() {
+        let rules = [rule("yyy.*", 1, &[1]), rule("zzz.*", 1, &[1])];
+        let (lines, manual) = removal_plan(&rules, &[0, 1]);
+        assert_eq!(lines, BTreeSet::from([1]));
+        assert_eq!(manual, vec![false, false]);
+    }
+
+    /// A locale group keeps its header while one of its rules stays.
+    #[test]
+    fn a_locale_group_keeps_its_header_while_a_rule_stays() {
+        let rules = [rule("bye", 3, &[1, 2]), rule("zzz.*", 4, &[1, 2])];
+        let (lines, _) = removal_plan(&rules, &[1]);
+        assert_eq!(lines, BTreeSet::from([4]));
     }
 }
