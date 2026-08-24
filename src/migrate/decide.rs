@@ -32,12 +32,13 @@ pub(super) fn decide(key: &str, value: &Node, section: Option<&str>) -> Decision
     let drop = |reason: &str| Decision::Drop(reason.to_string());
     match (section, key) {
         (None, "base_locale" | "locales" | "ignore") => Decision::Keep,
-        (None, "ignore_missing" | "ignore_unused" | "ignore_inconsistent_interpolations") => {
-            Decision::Keep
-        }
-        // Read, and reported as such, but the `eq-base` report itself is out of
-        // scope. Kept so the patterns are not lost.
-        (None, "ignore_eq_base") => Decision::Keep,
+        (
+            None,
+            "ignore_missing"
+            | "ignore_unused"
+            | "ignore_eq_base"
+            | "ignore_inconsistent_interpolations",
+        ) => Decision::Keep,
         (None, "data" | "search") => Decision::Recurse,
         (None, "internal_locale") => drop("reports are English only"),
         (None, "translation") => drop("translation backends are out of scope"),

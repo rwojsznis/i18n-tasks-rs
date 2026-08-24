@@ -85,6 +85,44 @@ fn a_reserved_interpolation_exits_one() {
 }
 
 #[test]
+fn eq_base_reports_equal_values_and_exits_one() {
+    let root = std::env::temp_dir().join("i18n-tasks-rs-exit-eq-base");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("config/locales")).unwrap();
+    std::fs::write(root.join("config/locales/en.yml"), "en:\n  same: Same\n").unwrap();
+    std::fs::write(root.join("config/locales/es.yml"), "es:\n  same: Same\n").unwrap();
+    std::fs::write(
+        root.join("config/i18n-tasks.yml"),
+        "base_locale: en\nlocales: [en, es]\ndata:\n  read:\n    - config/locales/%{locale}.yml\n",
+    )
+    .unwrap();
+    let out = Command::new(BIN)
+        .args(["eq-base", "-f", "json"])
+        .arg("-c")
+        .arg(root.join("config/i18n-tasks.yml"))
+        .arg("--root")
+        .arg(&root)
+        .output()
+        .expect("binary runs");
+    assert_eq!(out.status.code(), Some(1));
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("\"check\": \"eq_base\""), "{text}");
+    assert!(text.contains("\"key\": \"same\""), "{text}");
+
+    let clean = Command::new(BIN)
+        .args(["eq-base", "en"])
+        .arg("-c")
+        .arg(root.join("config/i18n-tasks.yml"))
+        .arg("--root")
+        .arg(&root)
+        .output()
+        .expect("binary runs");
+    assert_eq!(clean.status.code(), Some(0));
+    assert!(String::from_utf8_lossy(&clean.stdout).contains("Same value as en: none"));
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn a_tool_failure_exits_two() {
     let p = Project::new("broken", "en:\n  a: &x A\n  b: *x\n", Some("t('a')\n"));
     let (code, text) = p.run(&["unused"]);
@@ -331,6 +369,7 @@ fn every_check_emits_json() {
     for (args, check) in [
         (vec!["missing", "-f", "json"], "missing"),
         (vec!["unused", "-f", "json"], "unused"),
+        (vec!["eq-base", "-f", "json"], "eq_base"),
         (
             vec!["check-consistent-interpolations", "-f", "json"],
             "check_consistent_interpolations",

@@ -251,8 +251,6 @@ impl Config {
                 "ignore" => ignore = str_list(v, &ctx(key))?,
                 "ignore_missing" => ignore_missing = ignore_spec(v, &ctx(key))?,
                 "ignore_unused" => ignore_unused = ignore_spec(v, &ctx(key))?,
-                // `eq-base` is out of scope, but the key is still recognised so
-                // a translated config does not have to strip it.
                 "ignore_eq_base" => ignore_eq_base = ignore_spec(v, &ctx(key))?,
                 "ignore_inconsistent_interpolations" => {
                     ignore_inconsistent = ignore_spec(v, &ctx(key))?;
@@ -577,8 +575,7 @@ mod tests {
         assert!(de.is_match("a.x") && !de.is_match("b.x") && de.is_match("c.x"));
     }
 
-    /// `ignore_eq_base` is recognised so a migrated config need not strip it,
-    /// even though `eq-base` itself is out of scope.
+    /// Every ignore type accepts both a list and per-locale groups.
     #[test]
     fn every_ignore_type_resolves() {
         let cfg = parse(

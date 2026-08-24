@@ -101,6 +101,10 @@ fn every_check_emits_the_same_envelope_fields_first() {
             ],
         ),
         (
+            vec!["eq-base", "-f", "json"],
+            vec!["check", "passed", "config_digest", "locales", "rows"],
+        ),
+        (
             vec!["check-consistent-interpolations", "-f", "json"],
             vec![
                 "check",

@@ -25,6 +25,7 @@ cargo build --release      # target/release/i18n-tasks-rs
 ```
 i18n-tasks-rs missing   [-l LOCALES] [locale ...] [--types used,diff,plural]
 i18n-tasks-rs unused    [-l LOCALES] [locale ...]
+i18n-tasks-rs eq-base   [-l LOCALES] [locale ...]
 i18n-tasks-rs check-consistent-interpolations [-l LOCALES] [locale ...]
 i18n-tasks-rs check-reserved-interpolations   [-l LOCALES] [locale ...]
 i18n-tasks-rs check-normalized [-l LOCALES] [locale ...]
@@ -192,7 +193,7 @@ search:
 ignore: [...]
 ignore_missing: [...]     # a list, or a per-locale mapping
 ignore_unused: [...]
-ignore_eq_base: [...]     # accepted, unused: eq-base is out of scope
+ignore_eq_base: [...]
 ignore_inconsistent_interpolations: [...]
 ```
 
@@ -216,7 +217,7 @@ An unknown key is an error, with the supported list in the message.
 | `src/data/emit.rs` | the hand-written YAML emitter (B1) |
 | `src/data/route.rs` | the conservative and pattern routers |
 | `src/plural.rs` | plural nodes and the static CLDR table (B7) |
-| `src/report/` | `unused`, `missing`, the interpolation checks, `normalize` |
+| `src/report/` | `unused`, `missing`, `eq-base`, the interpolation checks, `normalize` |
 | `src/used.rs` | the used-key set, scanned once for every locale, in parallel |
 | `src/yaml.rs` | a YAML reader over the `saphyr-parser` event stream |
 | `examples/phase_timing.rs` | where the wall clock goes, stage by stage |

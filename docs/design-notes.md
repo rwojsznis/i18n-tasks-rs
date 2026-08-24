@@ -186,7 +186,7 @@ Not implemented, on purpose.
 | The reference-key subsystem | See B4. Errors on a reference value instead. |
 | Rails inference — `human_attribute_name`, `model_name.human`, `default_i18n_subject`, `before_action` re-parenting | See accepted diffs 4 and 4a. Cover the resulting `activerecord.*` keys with `ignore_unused`. |
 | A persistent scan cache | A cold run over a few thousand files is well under a second, so there is nothing to buy. Cache bugs are invalidation bugs, and they present as "this key is unused" — the failure mode that deletes a live translation. |
-| `mv`, `cp`, `rm`, `data`, `data-merge`, `data-remove`, `prune`, `eq-base`, `irb`, `gem-path`, `config`, `check-prism` | Outside this tool's command surface. |
+| `mv`, `cp`, `rm`, `data`, `data-merge`, `data-remove`, `prune`, `irb`, `gem-path`, `config`, `check-prism` | Outside this tool's command surface. |
 | `internal_locale` — the CLI's own en/ru catalog | Reports are in English. This removes the `i18n` gem's `reserved_keys_pattern` too, which is hardcoded instead. |
 | YAML comment preservation | The gem does not preserve them either. |
 | YAML anchors, aliases and merge keys | The gem reads them with `aliases: true`, expands them, and never re-creates them, so its `normalize` silently inlines them. This port **errors** on read instead. |
