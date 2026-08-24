@@ -175,6 +175,17 @@ fn opaque_calls_are_reported() {
 }
 
 #[test]
+fn a_magic_comment_covers_an_opaque_call_on_the_next_line() {
+    let scan = scan_source(
+        "# i18n-tasks-use t('known.key')\nreturn unless ready? && t(dynamic_key).present?\nt(other_key)\n",
+        "app/models/m.rb",
+    );
+    assert_eq!(sorted_unique_keys(&scan), vec!["known.key"]);
+    assert_eq!(scan.opaque.len(), 1, "{:?}", scan.opaque);
+    assert_eq!(scan.opaque[0].line_num, 3);
+}
+
+#[test]
 fn a_literal_key_ending_in_a_dot_also_yields_a_pattern() {
     // ref: used_keys.rb#expr_key_re — a key ending in `.` is dynamic.
     let scan = scan_source("t('category.')\n", "app/models/m.rb");
