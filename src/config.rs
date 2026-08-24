@@ -37,7 +37,10 @@ pub const DEFAULT_RELATIVE_ROOTS: &[&str] = &[
     "app/views",
 ];
 
-/// The five `ignore*` types.
+/// The four typed `ignore_*` config keys.
+///
+/// The fifth `ignore*` key, the global `ignore`, has no variant: it is merged
+/// into every type by `Config::ignore_patterns`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum IgnoreType {
     Missing,
