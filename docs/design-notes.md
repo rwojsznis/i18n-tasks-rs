@@ -1,7 +1,7 @@
 # Design notes
 
 Why this port looks the way it does. Source comments refer to the numbered
-items here — "design decision 3", "blocker B5", "section 3" — so keep the
+items here — "design decision 2", "blocker B5" — so keep the
 numbering stable.
 
 The Ruby gem, [`i18n-tasks`](https://github.com/glebm/i18n-tasks), is the
@@ -16,8 +16,11 @@ Scanning is only about a third of the cost of `unused`. A port that swaps only
 the parser gets roughly 1.3×, which the gem's own parser-versus-Prism benchmark
 shows. The wins are in the data layer.
 
-1. **Flat key map, not a node tree.** `HashMap<KeyPath, Value>` with interned
-   segments. The gem's cost comes from `select_nodes` deep-copying every
+1. **Flat key map, not a node tree.** A `Vec<Leaf>` of dotted keys with a
+   `HashMap<String, usize>` index over it, plus the interior-node and
+   plural-node sets ancestor lookups need. Segments are not interned; see
+   section 5. The gem's cost comes from
+   `select_nodes` deep-copying every
    matching node through `node.derive`
    (`data/tree/traversal.rb:93-128`) — measured at 2.04 s of 5.5 s.
 2. **Scan once.** The used-key set does not depend on the locale. The gem
@@ -189,3 +192,61 @@ Not implemented, on purpose.
 | YAML anchors, aliases and merge keys | The gem reads them with `aliases: true`, expands them, and never re-creates them, so its `normalize` silently inlines them. This port **errors** on read instead. |
 | Dates, times, `!ruby/*` YAML types | Psych raises `DisallowedClass` today. Rejected with a clear error. |
 | The exact terminal-table layout and Rainbow colour codes | Reimplemented plainly, plus a `--format json` the gem lacks. |
+
+---
+
+## 4. Two behaviours that only a gem spec pins down
+
+Both of these were port bugs, caught by the last specs to be ported. They are
+written up here because the code that gets them right looks arbitrary without
+them. Neither fix changed any of the four differential reports in
+[`accepted-diffs.md`](accepted-diffs.md).
+
+### The read pattern decides which files name a locale
+
+`file_system_base.rb:122-124` builds an anchored regex out of the read pattern:
+`%{locale}` becomes `([^/.]+)`, which a dotted file name cannot satisfy.
+`src/data/load.rs#locale_pattern_re` does the same, `**` and all.
+
+Anchoring on the literal tail of the pattern prefix instead cannot tell
+`config/locales/%{locale}.yml` from `config/locales/*%{locale}.yml`: the glob
+reaches `other.fr.yml` under both, and the heuristic reads `fr` out of it under
+both. A project whose only read pattern is `config/locales/%{locale}.yml` then
+infers a locale `fr` the gem never sees, builds an empty tree for it, and
+`missing --types diff` reports every base key against it.
+
+ref: `spec/file_system_data_spec.rb#available_locales`, which runs three read
+patterns over the same three files and expects three different answers. The
+three cases are `the_read_pattern_decides_which_files_name_a_locale`.
+
+### A `search.paths` entry may name a file
+
+`Find.find` yields a path handed to it directly, so `paths: %w[a/a a/b/a.txt]`
+finds `a/b/a.txt`. Calling `read_dir` on every entry finds nothing for a file,
+silently. `Finder::consider` holds the per-file decision, and both the walk and
+a direct path go through it, so a named file meets the same hidden, `only` and
+`exclude` rules the gem applies to it.
+
+ref: `spec/scanners/files/file_finder_spec.rb`.
+
+---
+
+## 5. Implementation choices
+
+Not behaviour differences, and not visible in the output.
+
+- **No segment interning.** An early sketch had `KeyPath = SmallVec<[SegmentId;
+  8]>`. Keys are plain dotted `String`s instead, because the gem matches its
+  patterns against the dotted key anyway, and `unused` on the `large` fixture
+  already runs in 120 ms. Ancestor walks use `rsplit_once('.')`, exactly like
+  the gem's `sub(/\.[^.]+\z/, "")`.
+- **`similar` provides the unified diff.** `normalize --dry-run` needs a real
+  diff, and a hand-rolled LCS would need quadratic memory on a 5,000-line locale
+  file.
+- **Rails context detection is always on.** The gem gates controller, mailer and
+  ViewComponent detection behind `search.prism: "rails"`. Rails inference is
+  dropped anyway (section 3, and accepted diffs 4 and 4a), and the flag is not
+  part of the new config format.
+- **`rayon` changed no behaviour**, which is the point of design decision 4.
+  Every differential report is byte-identical to its single-threaded version,
+  and `tests/jobs.rs` holds the output identical at every `--jobs` setting.

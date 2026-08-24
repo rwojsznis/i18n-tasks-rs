@@ -283,8 +283,8 @@ fn prev_char(bytes: &[u8], offset: usize) -> Option<char> {
 ///
 /// A comment line is skipped unless it carries a magic comment. The gem writes
 /// this as a negative lookahead, `(?!\si18n-tasks-use)`; restructuring it that
-/// way needs no lookaround. `.ts` and `.tsx` are absent from the gem's table, so
-/// a `//` comment in TypeScript is scanned, here as there.
+/// way needs no lookaround. `.jsx`, `.ts` and `.tsx` are absent from the gem's
+/// table, so a `//` comment in one of those is scanned, here as there.
 fn is_comment_line(ext: &str, line: &[u8]) -> bool {
     let markers: &[&str] = match ext {
         "coffee" | "opal" => &["#"],

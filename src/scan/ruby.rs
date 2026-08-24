@@ -13,7 +13,7 @@
 //!   `search.relative_exclude_method_name_paths` are honoured. The gem's Prism
 //!   path hardcodes `app/views/` and `app/components/`.
 //! * The Rails inference layer (`human_attribute_name`, `model_name.human`,
-//!   `before_action` re-parenting) is dropped. See `docs/design-notes.md`.
+//!   `before_action` re-parenting) is dropped. See accepted diffs 4 and 4a.
 
 use super::{FileScan, Locator, Occurrence, ScanConfig, SourceMap};
 use crate::keys::underscore;

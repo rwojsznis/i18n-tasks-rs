@@ -145,3 +145,20 @@ fn zero_jobs_is_an_error_rather_than_a_deadlock() {
         String::from_utf8_lossy(&out.stderr)
     );
 }
+
+/// `--jobs` sizes the pool the source scan fans out over, and `migrate-config`
+/// never scans: it reads one config file and writes another. The flag belongs to
+/// the commands that scan, not to every command in the binary.
+#[test]
+fn migrate_config_does_not_take_jobs() {
+    let out = Command::new(BIN)
+        .args(["migrate-config", "--jobs", "2"])
+        .output()
+        .expect("binary runs");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("unexpected argument '--jobs'"),
+        "unexpected message: {stderr}"
+    );
+    assert_eq!(out.status.code(), Some(2));
+}

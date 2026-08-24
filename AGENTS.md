@@ -16,7 +16,7 @@ documents to read before changing anything non-trivial:
 
 - `docs/design-notes.md` — the five design decisions, blockers B1–B10, and what
   is deliberately dropped. Source comments cite these by number
-  ("design decision 3", "blocker B5", "section 3").
+  ("design decision 2", "blocker B5").
 - `docs/accepted-diffs.md` — every deliberate difference from the gem, numbered.
   If you introduce a new one, add an entry in the same commit.
 
@@ -57,7 +57,7 @@ CLI-level tests live in `tests/`.
 4. **Run the linters last**, and get them clean before you call the work done.
 
 ```bash
-cargo test                                   # 334 tests, all must pass
+cargo test                                   # all of it, not just the new test
 cargo clippy --all-targets -- -D warnings
 cargo fmt
 ```
