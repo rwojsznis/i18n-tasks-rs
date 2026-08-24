@@ -5,6 +5,7 @@
 use super::{KeyRow, Outcome, Reason, render_table};
 use crate::config::{Config, IgnoreType};
 use crate::data::load::Store;
+use crate::pattern::PatternSet;
 use crate::plural::{depluralize_key, required_categories};
 use crate::used::UsedKeys;
 use serde::Serialize;
@@ -28,13 +29,13 @@ pub struct MissingReport {
     pub rows: Vec<KeyRow>,
 }
 
+/// `ignore` is the caller's compiled `ignore_missing` set for `locale`. It is a
+/// parameter rather than a `cfg` lookup because the set belongs to the locale:
+/// compiling it per key made every pattern a per-key cost.
+///
 /// ref: missing_keys.rb#locale_key_missing?
-fn locale_key_missing(cfg: &Config, store: &Store, locale: &str, key: &str) -> bool {
-    !store.key_value(locale, key)
-        && !store.external_has(locale, key)
-        && !cfg
-            .ignore_patterns(IgnoreType::Missing, Some(locale))
-            .is_match(key)
+fn locale_key_missing(store: &Store, ignore: &PatternSet, locale: &str, key: &str) -> bool {
+    !store.key_value(locale, key) && !store.external_has(locale, key) && !ignore.is_match(key)
 }
 
 pub fn report(
@@ -101,33 +102,38 @@ fn missing_used(cfg: &Config, store: &Store, used: &UsedKeys, locales: &[String]
 fn missing_diff(cfg: &Config, store: &Store, locales: &[String]) -> Vec<KeyRow> {
     let base = &store.base_locale;
     let mut rows = Vec::new();
-    let push_diff = |locale: &str, compared_to: &str, rows: &mut Vec<KeyRow>| {
-        let Some(source) = store.tree(compared_to) else {
-            return;
-        };
-        let source_base = store.tree(base);
-        for leaf in source.sorted_keys() {
-            let key = depluralize_key(&leaf.key, Some(source), source_base);
-            if locale_key_missing(cfg, store, locale, &key) {
-                rows.push(KeyRow {
-                    locale: locale.to_string(),
-                    key,
-                    value: Some(leaf.value.to_display_string()),
-                    reason: Some(Reason::Diff {
-                        present_in: compared_to.to_string(),
-                    }),
-                });
+    let push_diff =
+        |locale: &str, compared_to: &str, ignore: &PatternSet, rows: &mut Vec<KeyRow>| {
+            let Some(source) = store.tree(compared_to) else {
+                return;
+            };
+            let source_base = store.tree(base);
+            for leaf in source.sorted_keys() {
+                let key = depluralize_key(&leaf.key, Some(source), source_base);
+                if locale_key_missing(store, ignore, locale, &key) {
+                    rows.push(KeyRow {
+                        locale: locale.to_string(),
+                        key,
+                        value: Some(leaf.value.to_display_string()),
+                        reason: Some(Reason::Diff {
+                            present_in: compared_to.to_string(),
+                        }),
+                    });
+                }
             }
-        }
-    };
-    // Present in base but not in the locale.
+        };
+    // Present in base but not in the locale. One compiled ignore set per
+    // locale, as in `missing_used`.
     for locale in locales.iter().filter(|l| *l != base) {
-        push_diff(locale, base, &mut rows);
+        let ignore = cfg.ignore_patterns(IgnoreType::Missing, Some(locale));
+        push_diff(locale, base, &ignore, &mut rows);
     }
-    // Present in another locale but not in base.
+    // Present in another locale but not in base. Every comparison here asks
+    // about the base locale, so one set covers them all.
     if locales.iter().any(|l| l == base) {
+        let ignore = cfg.ignore_patterns(IgnoreType::Missing, Some(base));
         for locale in store.locales.iter().filter(|l| *l != base) {
-            push_diff(base, locale, &mut rows);
+            push_diff(base, locale, &ignore, &mut rows);
         }
     }
     // The two directions can report the same key twice.
@@ -196,5 +202,70 @@ impl MissingReport {
             &["Locale", "Key", "Type", "Base value"],
             &rows,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::data::load::{Leaf, LocaleTree, Value};
+    use std::collections::HashMap;
+    use std::path::{Path, PathBuf};
+    use std::sync::Arc;
+
+    /// A base locale that holds `n` keys and a `de` that holds none, so every
+    /// base key is a `diff` miss.
+    fn store_of(n: usize) -> Store {
+        let mut en = LocaleTree::default();
+        en.locale = "en".to_string();
+        let path: Arc<Path> = Arc::from(Path::new("config/locales/en.yml"));
+        for i in 0..n {
+            en.leaves.push(Leaf {
+                key: format!("a.k{i}"),
+                value: Value::Str("x".to_string()),
+                depth: 2,
+                path: Arc::clone(&path),
+                odd_segments: None,
+            });
+        }
+        let mut de = LocaleTree::default();
+        de.locale = "de".to_string();
+        Store {
+            base_locale: "en".to_string(),
+            locales: vec!["en".to_string(), "de".to_string()],
+            trees: HashMap::from([("en".to_string(), en), ("de".to_string(), de)]),
+            external: HashMap::default(),
+            warnings: Vec::new(),
+        }
+    }
+
+    /// The ignore set belongs to the locale, not to the key: a bigger locale
+    /// file must not compile a single pattern more.
+    #[test]
+    fn missing_diff_compiles_the_ignore_set_once_per_locale() {
+        let cfg = Config::parse(
+            "base_locale: en\nlocales: [en, de]\nignore_missing: [\"zz.*\", \"yy.*\"]\n",
+            Path::new("config/i18n-tasks.yml"),
+            PathBuf::from("."),
+        )
+        .unwrap();
+        let locales = vec!["en".to_string(), "de".to_string()];
+
+        let small = store_of(4);
+        let before = crate::pattern::compiles_on_this_thread();
+        let rows = missing_diff(&cfg, &small, &locales);
+        let for_small = crate::pattern::compiles_on_this_thread() - before;
+        assert_eq!(rows.len(), 4);
+
+        let big = store_of(400);
+        let before = crate::pattern::compiles_on_this_thread();
+        let rows = missing_diff(&cfg, &big, &locales);
+        let for_big = crate::pattern::compiles_on_this_thread() - before;
+        assert_eq!(rows.len(), 400);
+
+        assert_eq!(
+            for_small, for_big,
+            "the compile count follows the key count"
+        );
     }
 }
