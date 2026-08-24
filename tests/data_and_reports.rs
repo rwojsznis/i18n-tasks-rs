@@ -368,8 +368,8 @@ fn search_exclude_prunes_a_directory() {
         "base_locale: en\nlocales: [en]\ndata:\n  read:\n    - config/locales/%{locale}.yml\nsearch:\n  paths: [app/]\n  exclude: [app/webpack]\n",
     );
     let used = UsedKeys::scan(&cfg).unwrap();
-    assert!(used.key_set.contains("a"));
-    assert!(!used.key_set.contains("b"));
+    assert!(used.key_used("a"));
+    assert!(!used.key_used("b"));
 }
 
 #[test]
@@ -1147,7 +1147,6 @@ fn missing_used_falls_back_to_the_key_itself() {
     keys.insert("absent".to_string(), vec![occ("absent")]);
     let used = UsedKeys {
         keys,
-        key_set: Default::default(),
         patterns: Default::default(),
         pattern_sources: Vec::new(),
         opaque: Vec::new(),
