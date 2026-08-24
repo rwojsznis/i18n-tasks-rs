@@ -179,7 +179,6 @@ An unknown key is an error, with the supported list in the message.
 cargo test
 cargo clippy --all-targets -- -D warnings
 cargo fmt --check
-./tests/no_cache.sh
 ```
 
 `tests/jobs.rs` holds every command, in both formats, to the same bytes at
@@ -213,12 +212,6 @@ non-BMP characters are written literally rather than as `\Uxxxxxxxx`. The
 quoting rules are Q1 to Q7 in `style_of`, one test each. Q2 copies Psych's
 `/^[^[:word:]][^"]*$/` past what the YAML grammar needs, which keeps the output
 identical to the gem's for the ordinary case.
-
-## Caching
-
-There is none, anywhere, by decision. See section 4a of
-[`docs/design-notes.md`](docs/design-notes.md). `./tests/no_cache.sh` runs in CI
-to keep it that way.
 
 ## License
 

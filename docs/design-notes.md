@@ -1,7 +1,7 @@
 # Design notes
 
 Why this port looks the way it does. Source comments refer to the numbered
-items here — "design decision 3", "blocker B5", "section 4a" — so keep the
+items here — "design decision 3", "blocker B5", "section 3" — so keep the
 numbering stable.
 
 The Ruby gem, [`i18n-tasks`](https://github.com/glebm/i18n-tasks), is the
@@ -35,9 +35,7 @@ shows. The wins are in the data layer.
    concurrency in PR #687 because threads broke on shared IO and `warn`. Here
    each file scan is a pure function from bytes to occurrences.
 5. **The per-file scan stays a pure function** — `fn(&[u8], &Path) -> FileScan`,
-   with a `Serialize` `Occurrence`. Good design on its own, and the only
-   concession to a possible future cache. See section 4a: the cache is not
-   built.
+   with a `Serialize` `Occurrence`.
 
 Two O(n²) bugs in the gem this port does not copy:
 
@@ -184,32 +182,10 @@ Not implemented, on purpose.
 | Haml | No scanner. Slim, ERB, JS and TS are covered. |
 | The reference-key subsystem | See B4. Errors on a reference value instead. |
 | Rails inference — `human_attribute_name`, `model_name.human`, `default_i18n_subject`, `before_action` re-parenting | See accepted diffs 4 and 4a. Cover the resulting `activerecord.*` keys with `ignore_unused`. |
-| A persistent scan cache | See section 4a. |
+| A persistent scan cache | A cold run over a few thousand files is well under a second, so there is nothing to buy. Cache bugs are invalidation bugs, and they present as "this key is unused" — the failure mode that deletes a live translation. |
 | `mv`, `cp`, `rm`, `data`, `data-merge`, `data-remove`, `prune`, `eq-base`, `irb`, `gem-path`, `config`, `check-prism` | Outside this tool's command surface. |
 | `internal_locale` — the CLI's own en/ru catalog | Reports are in English. This removes the `i18n` gem's `reserved_keys_pattern` too, which is hardcoded instead. |
 | YAML comment preservation | The gem does not preserve them either. |
 | YAML anchors, aliases and merge keys | The gem reads them with `aliases: true`, expands them, and never re-creates them, so its `normalize` silently inlines them. This port **errors** on read instead. |
 | Dates, times, `!ruby/*` YAML types | Psych raises `DisallowedClass` today. Rejected with a clear error. |
 | The exact terminal-table layout and Rainbow colour codes | Reimplemented plainly, plus a `--format json` the gem lacks. |
-
----
-
-## 4a. Caching — out of scope
-
-**No cache, in any form.** No cache module, no `--cache` flag, no cache
-dependency. `tests/no_cache.sh` enforces it.
-
-- The workload is small. With Prism, `rayon` and the aho-corasick prefilter, a
-  cold run over a few thousand source files lands well under a second — which is
-  the number a cache was supposed to buy. On the project this port was built
-  against, the whole of `health` — five checks over 81,955 keys and 2,406
-  scanned files — is 619 ms. The source scan is no longer the cost; reading
-  7.0 MB of locale YAML is, at about 240 ms, and a scan cache would not touch
-  it.
-- A cache is the one component that can silently produce **wrong** results.
-  Every bug in it is an invalidation bug, and invalidation bugs present as "this
-  key is unused" — the failure mode that deletes a live translation.
-- A cache hides regressions during development: a skipped scan looks correct
-  when a stale result is served.
-
-The option is kept open at zero cost by design decision 5, and nothing more.

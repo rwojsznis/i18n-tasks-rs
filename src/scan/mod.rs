@@ -24,9 +24,7 @@ pub struct Occurrence {
     pub candidate_keys: Vec<String>,
 }
 
-/// The result of scanning one file. A pure function of the file bytes and path,
-/// so it stays cacheable in principle. See section 4a of `docs/design-notes.md`:
-/// no cache is built.
+/// The result of scanning one file. A pure function of the file bytes and path.
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct FileScan {
     /// Fully resolved keys.
