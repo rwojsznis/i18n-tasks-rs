@@ -208,18 +208,8 @@ enum Command {
     Normalize {
         #[command(flatten)]
         common: Common,
-        /// Route every key through `data.write`, so keys physically move.
-        #[arg(long, short = 'p')]
-        pattern_router: bool,
-        /// Write the changes. Required before anything is touched on disk.
-        #[arg(long)]
-        write: bool,
-        /// Print a unified diff of every change, and write nothing.
-        #[arg(long)]
-        dry_run: bool,
-        /// Allow deleting a file that ends up with no keys.
-        #[arg(long)]
-        allow_delete: bool,
+        #[command(flatten)]
+        flags: NormalizeFlags,
     },
     /// Run every check and print the statistics header.
     Health {
@@ -237,41 +227,132 @@ enum Command {
     /// relative roots, then reads the result back before offering to write it.
     /// Exits 1 when the generated config still needs a human.
     InitConfig {
-        /// Where to write. Default: config/i18n-tasks-rs.yml.
-        #[arg(long, short = 'o')]
-        to: Option<PathBuf>,
-        /// Write the file. Without this the config goes to stdout.
-        #[arg(long)]
-        write: bool,
-        /// Overwrite the destination when it already exists.
-        #[arg(long)]
-        force: bool,
-        /// The project directory to inspect. Default: the working directory.
-        #[arg(long)]
-        root: Option<PathBuf>,
+        #[command(flatten)]
+        flags: InitFlags,
     },
     /// Convert a gem config (YAML or ERB) into the config this tool reads.
     ///
     /// Unsupported settings are dropped, each with the reason recorded in the
     /// output header. Exits 1 when the result still needs a human.
     MigrateConfig {
-        /// The gem config to read. Default: config/i18n-tasks.yml, then
-        /// config/i18n-tasks.yml.erb.
-        #[arg(long, short = 'i')]
-        from: Option<PathBuf>,
-        /// Where to write. Default: config/i18n-tasks-rs.yml.
-        #[arg(long, short = 'o')]
-        to: Option<PathBuf>,
-        /// Write the file. Without this the migrated config goes to stdout.
-        #[arg(long)]
-        write: bool,
-        /// Overwrite the destination when it already exists.
-        #[arg(long)]
-        force: bool,
-        /// Directory the default paths are looked up in.
-        #[arg(long)]
-        root: Option<PathBuf>,
+        #[command(flatten)]
+        flags: MigrateFlags,
     },
+}
+
+/// `normalize`'s own flags.
+///
+/// A struct rather than four `bool` parameters on `normalize_command`: to the
+/// type checker the four are the same thing, so a transposed pair compiles and
+/// silently changes what the one command that writes to disk does. Clippy names
+/// that `fn_params_excessive_bools`.
+///
+/// The count itself is the CLI's, not ours, so pedantic clippy now says
+/// `struct_excessive_bools` here instead. That one is harmless: a field is named
+/// at every use, and clap needs a `bool` per flag.
+#[derive(clap::Args, Clone, Debug)]
+struct NormalizeFlags {
+    /// Route every key through `data.write`, so keys physically move.
+    #[arg(long, short = 'p')]
+    pattern_router: bool,
+    /// Write the changes. Required before anything is touched on disk.
+    #[arg(long)]
+    write: bool,
+    /// Print a unified diff of every change, and write nothing.
+    #[arg(long)]
+    dry_run: bool,
+    /// Allow deleting a file that ends up with no keys.
+    #[arg(long)]
+    allow_delete: bool,
+}
+
+/// `init-config`'s flags, plus the two defaults they resolve to.
+///
+/// `to` and `root` are both `Option<PathBuf>` and `write` and `force` are both
+/// `bool`, so every pair here is transposable without a compile error. The
+/// resolution lives next to the declarations, so `init_config` reads the flags
+/// by name and never by position.
+#[derive(clap::Args, Clone, Debug)]
+struct InitFlags {
+    /// Where to write. Default: config/i18n-tasks-rs.yml.
+    #[arg(long, short = 'o')]
+    to: Option<PathBuf>,
+    /// Write the file. Without this the config goes to stdout.
+    #[arg(long)]
+    write: bool,
+    /// Overwrite the destination when it already exists.
+    #[arg(long)]
+    force: bool,
+    /// The project directory to inspect. Default: the working directory.
+    #[arg(long)]
+    root: Option<PathBuf>,
+}
+
+impl InitFlags {
+    /// The working directory, which is the root the gem uses.
+    fn root(&self) -> &Path {
+        self.root.as_deref().unwrap_or(Path::new("."))
+    }
+
+    /// `--to` is taken verbatim, so the destination is independent of the
+    /// project; only the default sits under `--root`.
+    fn target(&self) -> PathBuf {
+        match &self.to {
+            Some(to) => to.clone(),
+            None => self.root().join(init::INIT_TARGET),
+        }
+    }
+}
+
+/// `migrate-config`'s flags. Same shape as `InitFlags` and the same reason for
+/// it, with `--from` added.
+#[derive(clap::Args, Clone, Debug)]
+struct MigrateFlags {
+    /// The gem config to read. Default: config/i18n-tasks.yml, then
+    /// config/i18n-tasks.yml.erb.
+    #[arg(long, short = 'i')]
+    from: Option<PathBuf>,
+    /// Where to write. Default: config/i18n-tasks-rs.yml.
+    #[arg(long, short = 'o')]
+    to: Option<PathBuf>,
+    /// Write the file. Without this the migrated config goes to stdout.
+    #[arg(long)]
+    write: bool,
+    /// Overwrite the destination when it already exists.
+    #[arg(long)]
+    force: bool,
+    /// Directory the default paths are looked up in.
+    #[arg(long)]
+    root: Option<PathBuf>,
+}
+
+impl MigrateFlags {
+    fn root(&self) -> &Path {
+        self.root.as_deref().unwrap_or(Path::new("."))
+    }
+
+    fn target(&self) -> PathBuf {
+        match &self.to {
+            Some(to) => to.clone(),
+            None => self.root().join(migrate::MIGRATION_TARGET),
+        }
+    }
+
+    /// Without `--from`, the gem config is looked for under `--root`. Naming
+    /// both candidates and the directory is the whole error message here: there
+    /// is nothing else to go on.
+    fn source(&self) -> Result<PathBuf, String> {
+        match &self.from {
+            Some(from) => Ok(from.clone()),
+            None => migrate::find_gem_config(self.root()).ok_or_else(|| {
+                format!(
+                    "no gem config found. Looked for {} under {}. Name one with `--from`.",
+                    migrate::GEM_CONFIG_CANDIDATES.join(" and "),
+                    self.root().display()
+                )
+            }),
+        }
+    }
 }
 
 /// `MissingType`'s `ValueEnum` parser with each item trimmed first.
@@ -444,15 +525,9 @@ fn run() -> Result<u8, String> {
             let report = normalize::plan(&s.cfg, &s.store, &s.locales, false)?;
             emit(&s, &Check::Normalized(report))
         }
-        Command::Normalize {
-            common,
-            pattern_router,
-            write,
-            dry_run,
-            allow_delete,
-        } => {
+        Command::Normalize { common, flags } => {
             let s = Session::open(common)?;
-            normalize_command(&s, *pattern_router, *write, *dry_run, *allow_delete)
+            normalize_command(&s, flags)
         }
         Command::Health { common } => health(common),
         Command::Find { common } => {
@@ -460,50 +535,24 @@ fn run() -> Result<u8, String> {
             let used = s.scan()?;
             find_output(&s, &used)
         }
-        Command::InitConfig {
-            to,
-            write,
-            force,
-            root,
-        } => init_config(to.as_deref(), *write, *force, root.as_deref()),
-        Command::MigrateConfig {
-            from,
-            to,
-            write,
-            force,
-            root,
-        } => migrate_config(
-            from.as_deref(),
-            to.as_deref(),
-            *write,
-            *force,
-            root.as_deref(),
-        ),
+        Command::InitConfig { flags } => init_config(flags),
+        Command::MigrateConfig { flags } => migrate_config(flags),
     }
 }
 
 /// The gem's answer here is `cp $(bundle exec i18n-tasks gem-path)/templates/...`,
 /// which is the same file for every project. This one is generated from the
 /// project. Writing is opt-in all the same (blocker B8).
-fn init_config(
-    to: Option<&Path>,
-    write: bool,
-    force: bool,
-    root: Option<&Path>,
-) -> Result<u8, String> {
-    let root = root.unwrap_or(Path::new("."));
-    let to = match to {
-        Some(p) => p.to_path_buf(),
-        None => root.join(init::INIT_TARGET),
-    };
-    let generated = init::generate(root, &to)?;
+fn init_config(flags: &InitFlags) -> Result<u8, String> {
+    let to = flags.target();
+    let generated = init::generate(flags.root(), &to)?;
 
-    if write {
-        write_config(&to, &generated.output, force)?;
+    if flags.write {
+        write_config(&to, &generated.output, flags.force)?;
     } else {
         print!("{}", generated.output);
     }
-    eprint!("{}", init::to_text(&generated, &to, write));
+    eprint!("{}", init::to_text(&generated, &to, flags.write));
     Ok(if generated.needs_attention() {
         EXIT_FOUND
     } else {
@@ -529,28 +578,9 @@ fn write_config(to: &Path, contents: &str, force: bool) -> Result<(), String> {
 
 /// ref: blocker B3. The gem config is ERB over Ruby, so it is translated, not
 /// renamed. Writing is opt-in here as it is everywhere else (blocker B8).
-fn migrate_config(
-    from: Option<&Path>,
-    to: Option<&Path>,
-    write: bool,
-    force: bool,
-    root: Option<&Path>,
-) -> Result<u8, String> {
-    let root = root.unwrap_or(Path::new("."));
-    let from = match from {
-        Some(p) => p.to_path_buf(),
-        None => migrate::find_gem_config(root).ok_or_else(|| {
-            format!(
-                "no gem config found. Looked for {} under {}. Name one with `--from`.",
-                migrate::GEM_CONFIG_CANDIDATES.join(" and "),
-                root.display()
-            )
-        })?,
-    };
-    let to = match to {
-        Some(p) => p.to_path_buf(),
-        None => root.join(migrate::MIGRATION_TARGET),
-    };
+fn migrate_config(flags: &MigrateFlags) -> Result<u8, String> {
+    let from = flags.source()?;
+    let to = flags.target();
     if from == to {
         return Err("`--from` and `--to` are the same file".into());
     }
@@ -558,12 +588,12 @@ fn migrate_config(
         .map_err(|e| format!("cannot read {}: {e}", from.display()))?;
     let migration = migrate::migrate(&src, &from, &to)?;
 
-    if write {
-        write_config(&to, &migration.output, force)?;
+    if flags.write {
+        write_config(&to, &migration.output, flags.force)?;
     } else {
         print!("{}", migration.output);
     }
-    eprint!("{}", migrate::to_text(&migration, &from, &to, write));
+    eprint!("{}", migrate::to_text(&migration, &from, &to, flags.write));
     Ok(if migration.needs_attention() {
         EXIT_FOUND
     } else {
@@ -690,17 +720,11 @@ impl Serialize for Health<'_> {
 
 /// ref: blocker B8. `--write` is required, `--dry-run` prints the diff, and a
 /// deletion always needs `--allow-delete` on top of `--write`.
-fn normalize_command(
-    s: &Session,
-    pattern_router: bool,
-    write: bool,
-    dry_run: bool,
-    allow_delete: bool,
-) -> Result<u8, String> {
-    if write && dry_run {
+fn normalize_command(s: &Session, flags: &NormalizeFlags) -> Result<u8, String> {
+    if flags.write && flags.dry_run {
         return Err("`--write` and `--dry-run` contradict each other".into());
     }
-    let report = normalize::plan(&s.cfg, &s.store, &s.locales, pattern_router)?;
+    let report = normalize::plan(&s.cfg, &s.store, &s.locales, flags.pattern_router)?;
     let deletions = report.deletions();
     // Always print the deletion list, whether or not the run may act on it.
     if !deletions.is_empty() {
@@ -714,7 +738,7 @@ fn normalize_command(
             "{}",
             serde_json::to_string_pretty(&serde_json::json!({
                 "check": "normalize",
-                "written": write,
+                "written": flags.write,
                 "config_digest": s.cfg.digest,
                 "locales": s.locales,
                 "changes": report.changes,
@@ -723,15 +747,15 @@ fn normalize_command(
             .map_err(|e| e.to_string())?
         );
     } else {
-        print!("{}", report.to_normalize_text(dry_run));
+        print!("{}", report.to_normalize_text(flags.dry_run));
     }
-    if !write {
+    if !flags.write {
         if !s.json {
             println!("Nothing was written. Pass `--write` to apply, `--dry-run` to see the diff.");
         }
         return Ok(EXIT_OK);
     }
-    if !deletions.is_empty() && !allow_delete {
+    if !deletions.is_empty() && !flags.allow_delete {
         return Err(
             "refusing to delete the files listed above. Pass `--allow-delete` to allow it.".into(),
         );
