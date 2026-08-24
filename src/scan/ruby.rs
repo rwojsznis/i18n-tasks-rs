@@ -60,9 +60,15 @@ fn scan_buffer(bytes: &[u8], path: &Path, cfg: &ScanConfig, loc: Locator) -> Fil
             )
         })
         .collect();
+    let mut covered_lines = Vec::new();
     for (offset, text) in comments {
-        v.handle_magic_comment(offset, &text);
+        if v.handle_magic_comment(offset, &text) {
+            covered_lines.push(v.loc.locate(offset).1 + 1);
+        }
     }
+    v.out
+        .opaque
+        .retain(|occ| !covered_lines.contains(&occ.line_num));
     v.out
 }
 
@@ -319,28 +325,29 @@ impl<'a> Visitor<'a> {
             .map_or_else(|| self.root_ctx(), |r| r.ctx.clone())
     }
 
-    fn handle_magic_comment(&mut self, offset: usize, text: &[u8]) {
+    fn handle_magic_comment(&mut self, offset: usize, text: &[u8]) -> bool {
         let Ok(text) = std::str::from_utf8(text) else {
-            return;
+            return false;
         };
         let Some(payload) = strip_magic_prefix(text) else {
-            return;
+            return false;
         };
         // ref: ruby_scanner.rb:203 — `delete("#")` then `strip`.
         let payload: String = payload.chars().filter(|c| *c != '#').collect();
         let payload = payload.trim();
         if payload.is_empty() {
-            return;
+            return false;
         }
         // The gem splits several calls on `/\s+(?=t)/` and rejoins with "; ".
         // ref: ruby_scanner.rb:87
         let joined = split_calls(payload).join("; ");
         let nested = pr::parse(joined.as_bytes());
         if nested.errors().count() > 0 {
-            return;
+            return false;
         }
         let ctx = self.resolve_comment_ctx(offset);
         let calls = collect_translation_calls(&nested.node());
+        let key_count = self.out.keys.len();
         // The occurrence points at the comment, not at the nested parse.
         let (pos, line_num, line_pos) = self.loc.locate(offset);
         for call in calls {
@@ -369,6 +376,7 @@ impl<'a> Visitor<'a> {
             };
             self.out.keys.push((resolved[0].clone(), occ));
         }
+        self.out.keys.len() > key_count
     }
 }
 

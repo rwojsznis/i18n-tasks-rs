@@ -59,10 +59,13 @@ CLI-level tests live in `tests/`.
 4. **Run the linters last**, and get them clean before you call the work done.
 
 ```bash
-cargo test                                   # all of it, not just the new test
+cargo test --quiet                           # full suite; show details only on failure
 cargo clippy --all-targets -- -D warnings
 cargo fmt
 ```
+
+Keep successful test output brief. We care about failures: if the quiet test
+run fails, inspect and report the complete failure output.
 
 Do not report a change as finished until all three are green. If something is
 left failing or unfinished, say so explicitly rather than narrowing the scope
