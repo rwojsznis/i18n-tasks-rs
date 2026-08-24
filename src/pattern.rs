@@ -81,19 +81,32 @@ impl Pattern {
             return None;
         }
         let mut caps: Captures = vec![None; self.group_count];
-        if self.run(0, bytes, 0, &mut caps) {
+        let mut memo = Memo::new(self.prog.len(), bytes.len());
+        if self.run(0, bytes, 0, &mut caps, &mut memo) {
             Some(caps)
         } else {
             None
         }
     }
 
-    fn run(&self, pc: usize, s: &[u8], pos: usize, caps: &mut Captures) -> bool {
+    /// Runs one instruction, with the dead-state memo in front of it.
+    fn run(&self, pc: usize, s: &[u8], pos: usize, caps: &mut Captures, memo: &mut Memo) -> bool {
+        if memo.is_dead(pc, pos) {
+            return false;
+        }
+        if self.step(pc, s, pos, caps, memo) {
+            return true;
+        }
+        memo.mark_dead(pc, pos);
+        false
+    }
+
+    fn step(&self, pc: usize, s: &[u8], pos: usize, caps: &mut Captures, memo: &mut Memo) -> bool {
         match &self.prog[pc] {
             Inst::Match => pos == s.len(),
             Inst::Lit(l) => {
                 if s.len() - pos >= l.len() && s[pos..pos + l.len()] == l[..] {
-                    self.run(pc + 1, s, pos + l.len(), caps)
+                    self.run(pc + 1, s, pos + l.len(), caps, memo)
                 } else {
                     false
                 }
@@ -102,7 +115,7 @@ impl Pattern {
             Inst::Star => {
                 let mut end = s.len();
                 loop {
-                    if self.run(pc + 1, s, end, caps) {
+                    if self.run(pc + 1, s, end, caps, memo) {
                         return true;
                     }
                     if end == pos {
@@ -116,7 +129,7 @@ impl Pattern {
                 let mut end = pos;
                 while end < s.len() && s[end] != b'.' {
                     end += 1;
-                    if self.run(pc + 1, s, end, caps) {
+                    if self.run(pc + 1, s, end, caps, memo) {
                         return true;
                     }
                 }
@@ -135,22 +148,22 @@ impl Pattern {
                 if end == pos {
                     return false;
                 }
-                self.run(pc + 1, s, end, caps)
+                self.run(pc + 1, s, end, caps, memo)
             }
             Inst::Split(targets) => {
                 for &t in targets.iter() {
-                    if self.run(t, s, pos, caps) {
+                    if self.run(t, s, pos, caps, memo) {
                         return true;
                     }
                 }
                 false
             }
-            Inst::Jmp(t) => self.run(*t, s, pos, caps),
+            Inst::Jmp(t) => self.run(*t, s, pos, caps, memo),
             // Save and restore so a failed branch leaves no stale capture.
             Inst::CapStart(i) => {
                 let saved = caps[*i];
                 caps[*i] = Some((pos, pos));
-                if self.run(pc + 1, s, pos, caps) {
+                if self.run(pc + 1, s, pos, caps, memo) {
                     true
                 } else {
                     caps[*i] = saved;
@@ -161,7 +174,7 @@ impl Pattern {
                 let saved = caps[*i];
                 let start = saved.map_or(pos, |(s0, _)| s0);
                 caps[*i] = Some((start, pos));
-                if self.run(pc + 1, s, pos, caps) {
+                if self.run(pc + 1, s, pos, caps, memo) {
                     true
                 } else {
                     caps[*i] = saved;
@@ -169,6 +182,60 @@ impl Pattern {
                 }
             }
         }
+    }
+}
+
+/// Dead-state memo for the backtracking search.
+///
+/// `run` is a plain backtracker, so a pattern with several `*` separated by
+/// literals used to visit the same `(pc, pos)` pair exponentially often —
+/// `*a*a*a*a*a*a*a*a*z` against 40 `a`s took 8.96 s. The DSL has no
+/// backreferences, so whether a state matches the rest of the key does not
+/// depend on the captures held at the time: a `(pc, pos)` that failed once
+/// always fails. Recording those failures bounds the work at one visit per
+/// `(pc, pos)`, and leaves the leftmost-first order — and so the captures the
+/// `data.write` router reads — exactly as it was.
+///
+/// The table is allocated only after `WARMUP` states have failed. `unused`
+/// calls `captures` once per key per pattern, and an ordinary pattern finishes
+/// in a handful of steps, so paying a zeroed `prog * key` table on every call
+/// costs more than it saves. Failures before the table exists are simply not
+/// recorded, which prunes less but decides nothing differently.
+struct Memo {
+    /// `key.len() + 1`, because `pos` may sit one past the last byte.
+    stride: usize,
+    cells: usize,
+    failed: Vec<bool>,
+    failures: usize,
+}
+
+/// Failed states tolerated before the table is worth its allocation.
+const WARMUP: usize = 64;
+
+impl Memo {
+    fn new(prog_len: usize, key_len: usize) -> Memo {
+        let stride = key_len + 1;
+        Memo {
+            stride,
+            cells: prog_len * stride,
+            failed: Vec::new(),
+            failures: 0,
+        }
+    }
+
+    fn is_dead(&self, pc: usize, pos: usize) -> bool {
+        !self.failed.is_empty() && self.failed[pc * self.stride + pos]
+    }
+
+    fn mark_dead(&mut self, pc: usize, pos: usize) {
+        self.failures += 1;
+        if self.failed.is_empty() {
+            if self.failures <= WARMUP {
+                return;
+            }
+            self.failed = vec![false; self.cells];
+        }
+        self.failed[pc * self.stride + pos] = true;
     }
 }
 
@@ -482,6 +549,42 @@ mod tests {
     #[test]
     fn unclosed_brace_is_literal() {
         assert!(m("a{b", "a{b"));
+    }
+
+    #[test]
+    fn backtracking_captures_keep_their_priority() {
+        // The dead-state memo prunes failures only, so a greedy `*` still
+        // claims as much as it can and the leftmost alternative still wins. These are the captures the `data.write` router reads.
+        let caps = |pat: &str, key: &str| -> Vec<String> {
+            Pattern::compile(pat)
+                .captures(key)
+                .expect("the pattern matches")
+                .iter()
+                .map(|c| {
+                    let (s, e) = c.expect("the group took part in the match");
+                    key[s..e].to_string()
+                })
+                .collect()
+        };
+        assert_eq!(caps("{*}.{*}", "a.b.c.d"), ["a.b.c", "d"]);
+        assert_eq!(caps("*{a,b}*{c,d}*", "aaa.bbb.ccc"), ["b", "c"]);
+        assert_eq!(caps("*{a,b}*{c,d}*", "cad"), ["a", "d"]);
+    }
+
+    #[test]
+    fn a_pathological_pattern_stays_fast() {
+        // Several `*` separated by literals cost exponential time in the key
+        // length before the dead-state memo went in: this pattern and key took
+        // 8.96 s, and `unused` runs every `ignore_*` pattern over every key.
+        let p = Pattern::compile("*a*a*a*a*a*a*a*a*z");
+        let key = "a".repeat(40);
+        let t = std::time::Instant::now();
+        assert!(!p.is_match(&key));
+        let took = t.elapsed();
+        assert!(
+            took < std::time::Duration::from_secs(1),
+            "matching took {took:?}, so the search is still exponential"
+        );
     }
 
     #[test]
