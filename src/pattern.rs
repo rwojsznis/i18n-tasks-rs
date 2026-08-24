@@ -51,8 +51,23 @@ pub struct Pattern {
 /// A half-open byte range inside the key, for one `{...}` capture group.
 pub type Captures = Vec<Option<(usize, usize)>>;
 
+/// Counts `Pattern::compile` calls, so a test can pin that a caller compiles
+/// its patterns once and shares them. Thread-local, because the test harness
+/// runs each test on its own thread and a global would race.
+#[cfg(test)]
+pub(crate) fn compiles_on_this_thread() -> usize {
+    COMPILE_COUNT.with(std::cell::Cell::get)
+}
+
+#[cfg(test)]
+thread_local! {
+    static COMPILE_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 impl Pattern {
     pub fn compile(source: &str) -> Pattern {
+        #[cfg(test)]
+        COMPILE_COUNT.with(|c| c.set(c.get() + 1));
         let mut group_count = 0;
         let toks = tokenize(source, &mut group_count);
         let mut prog = Vec::new();

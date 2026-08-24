@@ -131,17 +131,18 @@ pub fn replace_locale(path: &str, from: &str, to: &str) -> String {
 /// The conservative router: a key stays in the file it came from.
 ///
 /// ref: lib/i18n/tasks/data/router/conservative_router.rb
+///
+/// A genuinely new key falls through to `data.write`, so the router borrows a
+/// compiled `PatternRouter` rather than compiling its own — one set of rules
+/// per command, whichever router is in charge.
 pub struct ConservativeRouter<'a> {
     store: &'a Store,
-    fallback: PatternRouter,
+    fallback: &'a PatternRouter,
 }
 
 impl<'a> ConservativeRouter<'a> {
-    pub fn new(cfg: &Config, store: &'a Store) -> ConservativeRouter<'a> {
-        ConservativeRouter {
-            store,
-            fallback: PatternRouter::new(cfg),
-        }
+    pub fn new(fallback: &'a PatternRouter, store: &'a Store) -> ConservativeRouter<'a> {
+        ConservativeRouter { store, fallback }
     }
 
     pub fn route_key(&self, locale: &str, key: &str) -> Result<PathBuf, String> {
@@ -171,12 +172,12 @@ pub fn route(
     locale: &str,
     force_pattern: bool,
 ) -> Result<Vec<Destination>, String> {
+    let pattern = PatternRouter::new(cfg);
     let conservative = if force_pattern || cfg.data.router == Router::Pattern {
         None
     } else {
-        Some(ConservativeRouter::new(cfg, store))
+        Some(ConservativeRouter::new(&pattern, store))
     };
-    let pattern = PatternRouter::new(cfg);
     let tree = store
         .tree(locale)
         .ok_or_else(|| format!("locale `{locale}` has no data"))?;
@@ -337,6 +338,32 @@ mod tests {
             r.route_key("de", "some.other.key").unwrap(),
             PathBuf::from("config/locales/base.de.yml")
         );
+    }
+
+    /// The conservative router falls back to the pattern router, so `route`
+    /// must build the compiled `data.write` rules once and share them.
+    #[test]
+    fn route_compiles_the_write_patterns_once() {
+        let cfg = alternation_router(); // two `data.write` rules
+        let mut tree = crate::data::load::LocaleTree::default();
+        tree.leaves.push(crate::data::load::Leaf {
+            key: "brand.new".to_string(),
+            value: crate::data::load::Value::Str("x".to_string()),
+            depth: 2,
+            path: std::sync::Arc::from(Path::new("config/locales/base.de.yml")),
+            odd_segments: None,
+        });
+        let store = Store {
+            base_locale: cfg.base_locale.clone(),
+            locales: vec!["de".to_string()],
+            trees: HashMap::from([("de".to_string(), tree)]),
+            external: Default::default(),
+            warnings: Vec::new(),
+        };
+
+        let before = crate::pattern::compiles_on_this_thread();
+        route(&cfg, &store, "de", false).unwrap();
+        assert_eq!(crate::pattern::compiles_on_this_thread() - before, 2);
     }
 
     #[test]
