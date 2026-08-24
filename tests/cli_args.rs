@@ -83,3 +83,34 @@ fn shared_flags_are_rejected_before_the_subcommand() {
         );
     }
 }
+
+/// `--types` and `--format` are `ValueEnum`s, so the valid set is written once
+/// and clap lists it. The gem splits a list option on `/\s*,\s*/`, so a space
+/// after the comma is still accepted.
+///
+/// ref: lib/i18n/tasks/command/option_parsers/enum.rb
+#[test]
+fn the_enum_flags_list_their_values_and_tolerate_spaces() {
+    let p = Project::new("enums");
+    let cfg = p.config().to_str().unwrap().to_string();
+    let root = p.root.to_str().unwrap().to_string();
+    let missing = |extra: &[&str]| {
+        let mut args = vec!["missing", "-c", &cfg, "--root", &root];
+        args.extend_from_slice(extra);
+        run(&args)
+    };
+
+    let (code, text) = missing(&["--types", "used, diff"]);
+    assert_eq!(code, 0, "{text}");
+
+    let (code, text) = missing(&["--types", "bogus"]);
+    assert_eq!(code, 2, "{text}");
+    assert!(
+        text.contains("[possible values: used, diff, plural]"),
+        "{text}"
+    );
+
+    let (code, text) = missing(&["-f", "yaml"]);
+    assert_eq!(code, 2, "{text}");
+    assert!(text.contains("[possible values: text, json]"), "{text}");
+}

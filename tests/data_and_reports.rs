@@ -5,7 +5,7 @@
 use i18n_tasks_rs::config::Config;
 use i18n_tasks_rs::data::load::{Store, Value};
 use i18n_tasks_rs::report::missing::MissingType;
-use i18n_tasks_rs::report::{Outcome, interpolations, missing, unused};
+use i18n_tasks_rs::report::{Outcome, Reason, interpolations, missing, unused};
 use i18n_tasks_rs::stats::forest_stats;
 use i18n_tasks_rs::used::UsedKeys;
 use std::path::{Path, PathBuf};
@@ -276,7 +276,12 @@ fn missing_plural_uses_the_static_cldr_table() {
     let m = missing::report(&cfg, &store, &used, &store.locales, &[MissingType::Plural]);
     assert_eq!(m.rows.len(), 1);
     assert_eq!(m.rows[0].key, "apple");
-    assert!(m.rows[0].details.as_ref().unwrap().contains("other"));
+    assert_eq!(
+        m.rows[0].reason,
+        Some(Reason::Plural {
+            categories: vec!["other"]
+        })
+    );
 }
 
 #[test]
@@ -474,13 +479,7 @@ fn missing_plural_matches_the_gem_spec() {
     let rows: Vec<(String, String, String)> = m
         .rows
         .iter()
-        .map(|r| {
-            (
-                r.locale.clone(),
-                r.key.clone(),
-                r.details.clone().unwrap_or_default(),
-            )
-        })
+        .map(|r| (r.locale.clone(), r.key.clone(), r.details()))
         .collect();
     // `en` needs only one/other and has both everywhere, so nothing is
     // reported for it. `ignored_pattern.plural_key` is filtered out, and
@@ -621,17 +620,29 @@ fn inconsistent_interpolations_honours_its_ignore_list() {
     );
     let store = Store::load(&cfg).unwrap();
     let r = interpolations::inconsistent(&cfg, &store, &store.locales);
-    let rows: Vec<(&str, &str)> = r
+    let rows: Vec<(&str, String)> = r
         .rows
         .iter()
-        .map(|row| (row.key.as_str(), row.details.as_deref().unwrap_or("")))
+        .map(|row| (row.key.as_str(), row.details()))
         .collect();
     assert_eq!(
         rows,
         vec![
-            ("novars", "es has %{x}, en has no variables"),
-            ("reported", "es has no variables, en has %{name}"),
+            ("novars", "es has %{x}, en has no variables".to_string()),
+            (
+                "reported",
+                "es has no variables, en has %{name}".to_string()
+            ),
         ]
+    );
+    // The prose above is rendered from a tagged reason, not stored as one.
+    assert_eq!(
+        r.rows[0].reason,
+        Some(Reason::Interpolations {
+            variables: vec!["%{x}".into()],
+            base_locale: "en".into(),
+            base_variables: vec![],
+        })
     );
 }
 
@@ -933,12 +944,12 @@ fn missing_used_reports_a_key_with_no_candidates() {
         m.rows.iter().map(|r| r.key.as_str()).collect::<Vec<_>>(),
         vec!["absent"]
     );
-    assert!(
-        m.rows[0]
-            .details
-            .as_deref()
-            .unwrap()
-            .starts_with("used: app/a.rb:2")
+    assert_eq!(
+        m.rows[0].reason,
+        Some(Reason::Used {
+            path: "app/a.rb".into(),
+            line: 2
+        })
     );
 }
 
@@ -1158,7 +1169,13 @@ fn missing_used_falls_back_to_the_key_itself() {
         m.rows.iter().map(|r| r.key.as_str()).collect::<Vec<_>>(),
         vec!["absent"]
     );
-    assert_eq!(m.rows[0].details.as_deref(), Some("used: app/a.rb:7"));
+    assert_eq!(
+        m.rows[0].reason,
+        Some(Reason::Used {
+            path: "app/a.rb".into(),
+            line: 7
+        })
+    );
 }
 
 /// ref: accepted difference 4b. There is no JSON adapter, so a `.json` locale

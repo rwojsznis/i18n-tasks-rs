@@ -79,8 +79,8 @@ struct Common {
     positional_locales: Vec<String>,
     #[arg(long, short = 'c', default_value = DEFAULT_CONFIG_PATH)]
     config: PathBuf,
-    #[arg(long, short = 'f', value_parser = ["text", "json"], default_value = "text")]
-    format: String,
+    #[arg(long, short = 'f', value_enum, default_value = "text")]
+    format: Format,
     /// Directory every config path is relative to. Defaults to the working
     /// directory, which is what the gem uses.
     #[arg(long)]
@@ -91,6 +91,15 @@ struct Common {
     /// either way; a parallel run that reorders anything is a bug.
     #[arg(long, short = 'j')]
     jobs: Option<usize>,
+}
+
+/// The two output forms. A `ValueEnum` rather than a `String`, so the valid set
+/// is written once: clap validates the flag against the same list that `run`
+/// then matches on, and `--help` lists it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum Format {
+    Text,
+    Json,
 }
 
 impl Common {
@@ -170,8 +179,8 @@ enum Command {
         #[command(flatten)]
         common: Common,
         /// Subset of used, diff, plural. Defaults to all three.
-        #[arg(long, value_delimiter = ',')]
-        types: Option<Vec<String>>,
+        #[arg(long, value_delimiter = ',', value_parser = TrimmedMissingType)]
+        types: Option<Vec<MissingType>>,
     },
     /// Report translations that the source never uses.
     Unused {
@@ -265,6 +274,46 @@ enum Command {
     },
 }
 
+/// `MissingType`'s `ValueEnum` parser with each item trimmed first.
+///
+/// ref: lib/i18n/tasks/command/option_parsers/enum.rb. The gem splits a list
+/// option on `/\s*,\s*/`, so `--types "used, diff"` is valid there and was
+/// valid here before `--types` became a `ValueEnum`. The trim is the only thing
+/// this adds: the valid set still lives once, on the enum, and `--help` and the
+/// error message both still read it from there.
+#[derive(Clone)]
+struct TrimmedMissingType;
+
+impl clap::builder::TypedValueParser for TrimmedMissingType {
+    type Value = MissingType;
+
+    fn parse_ref(
+        &self,
+        cmd: &clap::Command,
+        arg: Option<&clap::Arg>,
+        value: &std::ffi::OsStr,
+    ) -> Result<MissingType, clap::Error> {
+        let inner = clap::builder::EnumValueParser::<MissingType>::new();
+        // A non-UTF-8 value has no whitespace to trim that we can see. Hand it
+        // over untouched and let the inner parser produce the error.
+        match value.to_str() {
+            Some(text) => inner.parse_ref(cmd, arg, std::ffi::OsStr::new(text.trim())),
+            None => inner.parse_ref(cmd, arg, value),
+        }
+    }
+
+    fn possible_values(
+        &self,
+    ) -> Option<Box<dyn Iterator<Item = clap::builder::PossibleValue> + '_>> {
+        use clap::ValueEnum;
+        Some(Box::new(
+            MissingType::value_variants()
+                .iter()
+                .filter_map(MissingType::to_possible_value),
+        ))
+    }
+}
+
 fn main() -> ExitCode {
     match run() {
         Ok(code) => ExitCode::from(code),
@@ -296,7 +345,7 @@ impl Session {
             cfg,
             store,
             locales,
-            json: common.format == "json",
+            json: common.format == Format::Json,
         })
     }
 
@@ -364,7 +413,9 @@ fn run() -> Result<u8, String> {
     match &cli.command {
         Command::Missing { common, types } => {
             let s = Session::open(common)?;
-            let types = parse_types(types.as_deref())?;
+            // No `--types` means all three, which clap cannot express as a
+            // default without also accepting an explicitly empty list.
+            let types = types.clone().unwrap_or_else(|| MissingType::ALL.to_vec());
             let used = s.scan()?;
             let report = missing::report(&s.cfg, &s.store, &used, &s.locales, &types);
             emit(&s, &Check::Missing(report))
@@ -518,13 +569,6 @@ fn migrate_config(
     } else {
         EXIT_OK
     })
-}
-
-fn parse_types(types: Option<&[String]>) -> Result<Vec<MissingType>, String> {
-    match types {
-        None => Ok(MissingType::ALL.to_vec()),
-        Some(names) => names.iter().map(|n| MissingType::parse(n.trim())).collect(),
-    }
 }
 
 /// Prints one check and returns its exit code. The JSON form wraps the report

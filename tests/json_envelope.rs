@@ -195,3 +195,69 @@ fn a_clean_health_run_still_emits_every_report() {
         assert!(out.contains(&format!("\"{check}\":")), "{check}: {out}");
     }
 }
+
+/// A row's reason is a tagged object, not an English sentence.
+///
+/// `find -f json` exists so this tool and the gem can be compared
+/// mechanically. A consumer of `missing -f json` deserves the same: the type,
+/// the path and the line as fields, not a sentence to regex apart.
+#[test]
+fn row_reasons_are_tagged_objects_not_prose() {
+    let p = Project::new("reasons");
+
+    let out = p.run(&["missing", "-f", "json"]);
+    let missing: serde_json::Value = serde_json::from_str(&out).expect("valid JSON");
+    let rows = missing["rows"].as_array().expect("rows");
+    let used = rows
+        .iter()
+        .find(|r| r["key"] == "missing.one")
+        .unwrap_or_else(|| panic!("no `missing.one` row in {out}"));
+    assert_eq!(used["reason"]["type"], "used", "{out}");
+    assert_eq!(
+        used["reason"]["path"], "app/controllers/a_controller.rb",
+        "{out}"
+    );
+    assert_eq!(used["reason"]["line"], 2, "{out}");
+    let diff = rows
+        .iter()
+        .find(|r| r["key"] == "unusedkey" && r["locale"] == "de")
+        .unwrap_or_else(|| panic!("no `unusedkey` diff row in {out}"));
+    assert_eq!(diff["reason"]["type"], "diff", "{out}");
+    assert_eq!(diff["reason"]["present_in"], "en", "{out}");
+    assert!(!out.contains("\"details\""), "{out}");
+
+    let out = p.run(&["check-consistent-interpolations", "-f", "json"]);
+    let report: serde_json::Value = serde_json::from_str(&out).expect("valid JSON");
+    let row = &report["rows"][0];
+    assert_eq!(row["key"], "inter", "{out}");
+    assert_eq!(row["reason"]["type"], "interpolations", "{out}");
+    assert_eq!(
+        row["reason"]["variables"],
+        json_array(&["%{count}"]),
+        "{out}"
+    );
+    assert_eq!(row["reason"]["base_locale"], "en", "{out}");
+    assert_eq!(
+        row["reason"]["base_variables"],
+        json_array(&["%{count}", "%{total}"]),
+        "{out}"
+    );
+    assert!(!out.contains("\"details\""), "{out}");
+
+    let out = p.run(&["check-reserved-interpolations", "-f", "json"]);
+    let report: serde_json::Value = serde_json::from_str(&out).expect("valid JSON");
+    let row = &report["rows"][0];
+    assert_eq!(row["key"], "reserved_one", "{out}");
+    assert_eq!(row["reason"]["type"], "reserved", "{out}");
+    assert_eq!(row["reason"]["names"], json_array(&["scope"]), "{out}");
+    assert!(!out.contains("\"details\""), "{out}");
+}
+
+fn json_array(items: &[&str]) -> serde_json::Value {
+    serde_json::Value::Array(
+        items
+            .iter()
+            .map(|s| serde_json::Value::String((*s).to_string()))
+            .collect(),
+    )
+}

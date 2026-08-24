@@ -5,7 +5,7 @@
 //! Blocker B2: the gem's `/(?<!%)%{[^}]+}/` needs a negative lookbehind, which
 //! the `regex` crate does not have, so the scan is hand-rolled over the bytes.
 
-use super::{KeyRow, Outcome, render_table};
+use super::{KeyRow, Outcome, Reason, render_table};
 use crate::config::{Config, IgnoreType};
 use crate::data::load::Store;
 use serde::Serialize;
@@ -80,13 +80,7 @@ impl InterpolationReport {
         let rows: Vec<Vec<String>> = self
             .rows
             .iter()
-            .map(|r| {
-                vec![
-                    r.locale.clone(),
-                    r.key.clone(),
-                    r.details.clone().unwrap_or_default(),
-                ]
-            })
+            .map(|r| vec![r.locale.clone(), r.key.clone(), r.details()])
             .collect();
         render_table(&self.title, &["Locale", "Key", "Detail"], &rows)
     }
@@ -135,12 +129,11 @@ pub fn inconsistent(cfg: &Config, store: &Store, locales: &[String]) -> Interpol
                     locale: locale.clone(),
                     key: leaf.key.clone(),
                     value: Some(other_value.to_string()),
-                    details: Some(format!(
-                        "{} has {}, {base} has {}",
-                        locale,
-                        set_to_string(&other_vars),
-                        set_to_string(&base_vars)
-                    )),
+                    reason: Some(Reason::Interpolations {
+                        variables: owned(&other_vars),
+                        base_locale: base.clone(),
+                        base_variables: owned(&base_vars),
+                    }),
                 });
             }
         }
@@ -179,7 +172,9 @@ pub fn reserved(store: &Store, locales: &[String]) -> InterpolationReport {
                 locale: locale.clone(),
                 key: leaf.key.clone(),
                 value: Some(value.to_string()),
-                details: Some(hits.join(", ")),
+                reason: Some(Reason::Reserved {
+                    names: hits.iter().map(|n| n.to_string()).collect(),
+                }),
             });
         }
     }
@@ -189,12 +184,10 @@ pub fn reserved(store: &Store, locales: &[String]) -> InterpolationReport {
     }
 }
 
-fn set_to_string(set: &BTreeSet<&str>) -> String {
-    if set.is_empty() {
-        "no variables".into()
-    } else {
-        set.iter().copied().collect::<Vec<_>>().join(", ")
-    }
+/// The set as an owned, sorted list. `BTreeSet` already orders it, and the
+/// text report joins it in that order.
+fn owned(set: &BTreeSet<&str>) -> Vec<String> {
+    set.iter().map(|v| (*v).to_string()).collect()
 }
 
 #[cfg(test)]

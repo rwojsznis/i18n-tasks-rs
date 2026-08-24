@@ -2,7 +2,7 @@
 //!
 //! ref: lib/i18n/tasks/missing_keys.rb
 
-use super::{KeyRow, Outcome, render_table};
+use super::{KeyRow, Outcome, Reason, render_table};
 use crate::config::{Config, IgnoreType};
 use crate::data::load::Store;
 use crate::plural::{depluralize_key, required_categories};
@@ -10,7 +10,9 @@ use crate::used::UsedKeys;
 use serde::Serialize;
 use std::collections::BTreeSet;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// The three `--types` values. `ValueEnum` so the valid set is written once:
+/// clap parses the flag, lists the values in `--help` and reports a bad one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum MissingType {
     Used,
     Diff,
@@ -18,17 +20,6 @@ pub enum MissingType {
 }
 
 impl MissingType {
-    pub fn parse(name: &str) -> Result<MissingType, String> {
-        match name {
-            "used" => Ok(MissingType::Used),
-            "diff" => Ok(MissingType::Diff),
-            "plural" => Ok(MissingType::Plural),
-            other => Err(format!(
-                "unknown missing type `{other}`. Use used, diff or plural."
-            )),
-        }
-    }
-
     pub const ALL: [MissingType; 3] = [MissingType::Used, MissingType::Diff, MissingType::Plural];
 }
 
@@ -93,7 +84,10 @@ fn missing_used(cfg: &Config, store: &Store, used: &UsedKeys, locales: &[String]
                     locale: locale.clone(),
                     key: key.clone(),
                     value: None,
-                    details: Some(format!("used: {}:{}", first.path.display(), first.line_num)),
+                    reason: Some(Reason::Used {
+                        path: first.path.clone(),
+                        line: first.line_num,
+                    }),
                 });
             }
         }
@@ -119,7 +113,9 @@ fn missing_diff(cfg: &Config, store: &Store, locales: &[String]) -> Vec<KeyRow> 
                     locale: locale.to_string(),
                     key,
                     value: Some(leaf.value.to_display_string()),
-                    details: Some(format!("diff: present in {compared_to}")),
+                    reason: Some(Reason::Diff {
+                        present_in: compared_to.to_string(),
+                    }),
                 });
             }
         }
@@ -158,7 +154,7 @@ fn missing_plural(cfg: &Config, store: &Store, locales: &[String]) -> Vec<KeyRow
                 continue;
             }
             let present: Vec<&str> = tree.children(key).iter().map(String::as_str).collect();
-            let absent: Vec<&str> = required
+            let absent: Vec<&'static str> = required
                 .iter()
                 .copied()
                 .filter(|r| !present.contains(r))
@@ -170,7 +166,7 @@ fn missing_plural(cfg: &Config, store: &Store, locales: &[String]) -> Vec<KeyRow
                 locale: locale.clone(),
                 key: key.to_string(),
                 value: None,
-                details: Some(format!("plural: missing {}", absent.join(", "))),
+                reason: Some(Reason::Plural { categories: absent }),
             });
         }
     }
@@ -190,7 +186,7 @@ impl MissingReport {
                 vec![
                     r.locale.clone(),
                     r.key.clone(),
-                    r.details.clone().unwrap_or_default(),
+                    r.details(),
                     r.value.clone().unwrap_or_default(),
                 ]
             })

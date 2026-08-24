@@ -123,12 +123,19 @@ fn json_output_carries_the_config_digest() {
     assert!(text.contains("\"key\": \"b\""), "{text}");
 }
 
+/// `--types` is a `ValueEnum`, so clap rejects a bad value and lists the three
+/// valid ones. Clap's usage-error exit code is 2, which is this tool's "the
+/// tool itself failed" code, so the contract is unchanged.
 #[test]
 fn an_unknown_missing_type_is_a_tool_failure() {
     let p = Project::new("types", "en:\n  a: A\n", Some("t('a')\n"));
     let (code, text) = p.run(&["missing", "--types", "bogus"]);
     assert_eq!(code, 2);
-    assert!(text.contains("unknown missing type"), "{text}");
+    assert!(text.contains("invalid value 'bogus'"), "{text}");
+    assert!(
+        text.contains("[possible values: used, diff, plural]"),
+        "{text}"
+    );
 }
 
 /// A trailing locale list restricts every command to those locales.

@@ -53,7 +53,7 @@ pub fn report(cfg: &Config, store: &Store, used: &UsedKeys, locales: &[String]) 
                 locale: locale.clone(),
                 key,
                 value,
-                details: None,
+                reason: None,
             });
         }
     }
