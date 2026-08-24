@@ -640,3 +640,23 @@ emitter writes them from the tag:
 name a few strings as numbers or dates — `1e5` is one. That direction is safe:
 the loader keeps the text and the emitter writes it back unquoted, so Psych
 reads the string it read before.
+
+## 30. A locale file is replaced, never rewritten in place
+
+**Gem.** `FileSystemBase#write_tree` opens the destination and writes into it,
+so the file is empty from the moment the write starts until it ends. A failure
+part-way — a full disk is the realistic one — leaves a locale file holding half
+its keys, and the loss is silent: the file still parses.
+
+**Here.** `normalize --write` writes the new bytes to a sibling temp file,
+`sync_all`s it, and renames it over the destination. The rename is atomic on
+one filesystem, so the destination holds either all of the old bytes or all of
+the new ones, and a run that fails part-way leaves some files unwritten rather
+than one file half-written. This is the only code path in the tool that
+destroys data, which is why it gets the extra open.
+
+The three properties the plain write had are kept, so nothing else changes: a
+symlinked destination is written through rather than replaced, the file keeps
+its mode, and a destination the process cannot write is still an error with the
+same message. That last one needs a probe, because `rename` asks the directory
+for permission and not the file.

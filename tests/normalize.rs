@@ -516,3 +516,27 @@ fn a_yaml_boolean_stays_a_boolean() {
     );
     assert_eq!(p.run(&["check-normalized"]).0, 0);
 }
+
+/// `normalize --write` goes through a sibling temp file, so the run has to
+/// leave the destination directory holding the locale files and nothing else.
+#[test]
+fn a_written_run_leaves_no_temp_file_behind() {
+    let p = Project::new(
+        "no-temp",
+        "base_locale: en\nlocales: [en, de]\ndata:\n  read:\n    - config/locales/%{locale}.yml\nsearch:\n  paths: [app/]\n",
+    );
+    p.write("config/locales/en.yml", "en:\n  b: B\n  a: A\n")
+        .write("config/locales/de.yml", "de:\n  b: B\n  a: A\n");
+    let (code, text) = p.run(&["normalize", "--write"]);
+    assert_eq!(code, 0, "{text}");
+    let mut names: Vec<String> = std::fs::read_dir(p.root.join("config/locales"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    assert_eq!(names, ["de.yml", "en.yml"]);
+    assert_eq!(
+        p.read("config/locales/en.yml"),
+        "---\nen:\n  a: A\n  b: B\n"
+    );
+}

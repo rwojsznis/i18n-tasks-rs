@@ -253,7 +253,9 @@ fn display_path(cfg: &Config, path: &Path) -> String {
 ///
 /// A file cannot be written, a parent directory cannot be created, or an
 /// emptied file cannot be deleted. The plan is applied in order and stops at
-/// the first failure, so a partial write is possible.
+/// the first failure, so some files may be left unwritten — but no single file
+/// is left half-written, because `write_atomic` renames a finished temp file
+/// into place.
 pub fn apply(report: &NormalizeReport) -> Result<(), String> {
     for change in &report.changes {
         let path = change.path.as_path();
@@ -265,12 +267,76 @@ pub fn apply(report: &NormalizeReport) -> Result<(), String> {
                     std::fs::create_dir_all(dir)
                         .map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
                 }
-                std::fs::write(path, &change.after)
+                write_atomic(path, change.after.as_bytes())
                     .map_err(|e| format!("cannot write {}: {e}", path.display()))?;
             }
         }
     }
     Ok(())
+}
+
+/// Replaces `path`'s bytes with `bytes` through a sibling temp file and one
+/// `rename`. `std::fs::write` truncates first, so a failure part-way through
+/// (a full disk) leaves a truncated locale file, and this is the only code
+/// path in the tool that destroys data. Here the old file stays whole until
+/// the rename, which is atomic on the same filesystem.
+///
+/// The temp file is `sync_all`ed before the rename on purpose: without it a
+/// full disk is reported at close, after the rename has already put the short
+/// file in place.
+///
+/// Three things the plain write gave for free, which the rename has to keep:
+///
+/// - a symlinked destination is written through, not replaced with a plain
+///   file;
+/// - the destination keeps the mode it had, because the rename brings a new
+///   file with it;
+/// - a destination the process cannot write is an error. `rename` asks the
+///   directory for permission, not the file, so the file is probed first by
+///   opening it for append — the one mode that neither truncates nor creates.
+fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let target = through_symlink(path);
+    let dir = target.parent().unwrap_or_else(|| Path::new("."));
+    let name = target.file_name().unwrap_or(std::ffi::OsStr::new("locale"));
+    let existing = std::fs::metadata(&target).ok();
+    if existing.is_some() {
+        std::fs::OpenOptions::new().append(true).open(&target)?;
+    }
+
+    // The name holds the pid, so two runs over one project cannot share a
+    // temp file. Inside a run the destinations are distinct already.
+    let mut temp_name = std::ffi::OsString::from(".");
+    temp_name.push(name);
+    temp_name.push(format!(".{}.i18n-tasks-rs.tmp", std::process::id()));
+    let temp = dir.join(temp_name);
+
+    let written = (|| {
+        let mut file = std::fs::File::create(&temp)?;
+        file.write_all(bytes)?;
+        if let Some(meta) = &existing {
+            file.set_permissions(meta.permissions())?;
+        }
+        file.sync_all()
+    })()
+    .and_then(|()| std::fs::rename(&temp, &target));
+    if let Err(e) = written {
+        let _ = std::fs::remove_file(&temp);
+        return Err(e);
+    }
+    Ok(())
+}
+
+/// The path the write lands on: a symlink is followed, so the rename replaces
+/// what the link points at rather than the link. A broken link has nothing to
+/// follow, and is written as itself.
+fn through_symlink(path: &Path) -> PathBuf {
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_symlink() => {
+            std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+        }
+        _ => path.to_path_buf(),
+    }
 }
 
 /// A unified diff with three lines of context.
@@ -282,4 +348,114 @@ pub fn unified_diff(path: &str, before: &str, after: &str) -> String {
         out.push_str(&hunk.to_string());
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A directory of its own per test, so one test's leftovers cannot reach
+    /// another.
+    fn dir(name: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("i18n-tasks-rs-atomic-{name}"));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    fn names(dir: &Path) -> Vec<String> {
+        let mut out: Vec<String> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        out.sort();
+        out
+    }
+
+    #[test]
+    fn a_write_replaces_the_bytes_and_leaves_no_temp_file() {
+        let root = dir("replace");
+        let path = root.join("en.yml");
+        std::fs::write(&path, "old\n").unwrap();
+        write_atomic(&path, b"new\n").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "new\n");
+        assert_eq!(names(&root), ["en.yml"]);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_write_creates_a_file_that_is_not_there() {
+        let root = dir("create");
+        let path = root.join("en.yml");
+        write_atomic(&path, b"new\n").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "new\n");
+        assert_eq!(names(&root), ["en.yml"]);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The rename brings a new file with it, so the mode of the file it
+    /// replaces has to be carried over. `std::fs::write` kept it for free.
+    #[cfg(unix)]
+    #[test]
+    fn a_write_keeps_the_mode_of_the_file_it_replaces() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = dir("mode");
+        let path = root.join("en.yml");
+        std::fs::write(&path, "old\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).unwrap();
+        write_atomic(&path, b"new\n").unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o640, "the mode was not carried over");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// `rename` asks the directory for permission, not the file, so a
+    /// read-only destination would be replaced without the probe. Skipped when
+    /// the chmod does not take, which is what happens when the tests run as
+    /// root.
+    #[cfg(unix)]
+    #[test]
+    fn a_read_only_destination_is_an_error_and_keeps_its_bytes() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = dir("read-only");
+        let path = root.join("en.yml");
+        std::fs::write(&path, "old\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o444)).unwrap();
+        let writable = std::fs::OpenOptions::new().append(true).open(&path).is_ok();
+        let result = write_atomic(&path, b"new\n");
+        let bytes = std::fs::read_to_string(&path).unwrap();
+        let left = names(&root);
+        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644));
+        let _ = std::fs::remove_dir_all(&root);
+        if writable {
+            eprintln!("skipped: the chmod did not take effect");
+            return;
+        }
+        assert!(result.is_err(), "a read-only file was replaced");
+        assert_eq!(bytes, "old\n");
+        assert_eq!(left, ["en.yml"], "a temp file was left behind");
+    }
+
+    /// A symlinked destination is written through, as `std::fs::write` did.
+    /// The rename would otherwise put a plain file where the link was.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_destination_is_written_through() {
+        let root = dir("symlink");
+        let real = root.join("shared.yml");
+        let link = root.join("en.yml");
+        std::fs::write(&real, "old\n").unwrap();
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        write_atomic(&link, b"new\n").unwrap();
+        assert_eq!(std::fs::read_to_string(&real).unwrap(), "new\n");
+        assert!(
+            std::fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "the link was replaced by a plain file"
+        );
+        assert_eq!(names(&root), ["en.yml", "shared.yml"]);
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }
