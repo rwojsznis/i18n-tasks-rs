@@ -12,7 +12,8 @@ use i18n_tasks_rs::report::{Outcome, interpolations, missing, normalize, unused}
 use i18n_tasks_rs::stats::{ForestStats, forest_stats};
 use i18n_tasks_rs::used::UsedKeys;
 use i18n_tasks_rs::{init, migrate};
-use serde::Serialize;
+use serde::ser::SerializeMap;
+use serde::{Serialize, Serializer};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -304,6 +305,60 @@ impl Session {
     }
 }
 
+/// One check's result, under the name the CLI and the JSON report it by.
+///
+/// The name belongs to the command, not to the report type: `InterpolationReport`
+/// serves two checks, and `NormalizeReport` serves `check-normalized` as well as
+/// `normalize`. So an associated const on the report type cannot carry it, and
+/// this enum carries it instead. It lives here rather than in `report` because
+/// these are the CLI's names for things.
+///
+/// `run` names a check once, then `emit` and `health` both read the name, the
+/// outcome and the text out of it.
+#[derive(Serialize)]
+#[serde(untagged)]
+enum Check {
+    Missing(missing::MissingReport),
+    Unused(unused::UnusedReport),
+    ConsistentInterpolations(interpolations::InterpolationReport),
+    ReservedInterpolations(interpolations::InterpolationReport),
+    Normalized(normalize::NormalizeReport),
+}
+
+impl Check {
+    /// The `check` field of the JSON envelope, and the field name `health`
+    /// nests the report under.
+    fn name(&self) -> &'static str {
+        match self {
+            Check::Missing(_) => "missing",
+            Check::Unused(_) => "unused",
+            Check::ConsistentInterpolations(_) => "check_consistent_interpolations",
+            Check::ReservedInterpolations(_) => "check_reserved_interpolations",
+            Check::Normalized(_) => "check_normalized",
+        }
+    }
+
+    fn outcome(&self) -> Outcome {
+        match self {
+            Check::Missing(r) => r.outcome(),
+            Check::Unused(r) => r.outcome(),
+            Check::ConsistentInterpolations(r) | Check::ReservedInterpolations(r) => r.outcome(),
+            Check::Normalized(r) => r.outcome(),
+        }
+    }
+
+    fn to_text(&self) -> String {
+        match self {
+            Check::Missing(r) => r.to_text(),
+            Check::Unused(r) => r.to_text(),
+            Check::ConsistentInterpolations(r) | Check::ReservedInterpolations(r) => r.to_text(),
+            // `normalize` prints the same report differently, so the report has
+            // two renderers and this is the read-only one.
+            Check::Normalized(r) => r.to_check_text(),
+        }
+    }
+}
+
 fn run() -> Result<u8, String> {
     let cli = Cli::parse();
     match &cli.command {
@@ -312,44 +367,31 @@ fn run() -> Result<u8, String> {
             let types = parse_types(types.as_deref())?;
             let used = s.scan()?;
             let report = missing::report(&s.cfg, &s.store, &used, &s.locales, &types);
-            emit(&s, "missing", &report, report.outcome(), || {
-                report.to_text()
-            })
+            emit(&s, &Check::Missing(report))
         }
         Command::Unused { common } => {
             let s = Session::open(common)?;
             let used = s.scan()?;
             let report = unused::report(&s.cfg, &s.store, &used, &s.locales);
-            emit(&s, "unused", &report, report.outcome(), || report.to_text())
+            emit(&s, &Check::Unused(report))
         }
         Command::CheckConsistentInterpolations { common } => {
             let s = Session::open(common)?;
             let report = interpolations::inconsistent(&s.cfg, &s.store, &s.locales);
-            emit(
-                &s,
-                "check_consistent_interpolations",
-                &report,
-                report.outcome(),
-                || report.to_text(),
-            )
+            emit(&s, &Check::ConsistentInterpolations(report))
         }
         Command::CheckReservedInterpolations { common } => {
             let s = Session::open(common)?;
             let report = interpolations::reserved(&s.store, &s.locales);
-            emit(
-                &s,
-                "check_reserved_interpolations",
-                &report,
-                report.outcome(),
-                || report.to_text(),
-            )
+            emit(&s, &Check::ReservedInterpolations(report))
         }
         Command::CheckNormalized { common } => {
             let s = Session::open(common)?;
+            // `false` is `force_pattern`: the conservative router, which keeps
+            // every existing key in the file it is already in, so this reports
+            // formatting only and never a move.
             let report = normalize::plan(&s.cfg, &s.store, &s.locales, false)?;
-            emit(&s, "check_normalized", &report, report.outcome(), || {
-                report.to_check_text()
-            })
+            emit(&s, &Check::Normalized(report))
         }
         Command::Normalize {
             common,
@@ -485,36 +527,33 @@ fn parse_types(types: Option<&[String]>) -> Result<Vec<MissingType>, String> {
     }
 }
 
-fn emit<T: Serialize>(
-    session: &Session,
-    name: &str,
-    report: &T,
-    outcome: Outcome,
-    text: impl Fn() -> String,
-) -> Result<u8, String> {
+/// Prints one check and returns its exit code. The JSON form wraps the report
+/// in the shared envelope; the text form is the report's own.
+fn emit(session: &Session, check: &Check) -> Result<u8, String> {
+    let outcome = check.outcome();
     if session.json {
         #[derive(Serialize)]
-        struct Envelope<'a, T> {
+        struct Envelope<'a> {
             check: &'a str,
             passed: bool,
             config_digest: &'a str,
             locales: &'a [String],
             #[serde(flatten)]
-            report: &'a T,
+            report: &'a Check,
         }
         let env = Envelope {
-            check: name,
+            check: check.name(),
             passed: outcome == Outcome::Clean,
             config_digest: &session.cfg.digest,
             locales: &session.locales,
-            report,
+            report: check,
         };
         println!(
             "{}",
             serde_json::to_string_pretty(&env).map_err(|e| e.to_string())?
         );
     } else {
-        print!("{}", text());
+        print!("{}", check.to_text());
     }
     Ok(if outcome == Outcome::Clean {
         EXIT_OK
@@ -535,67 +574,74 @@ fn health(common: &Common) -> Result<u8, String> {
         return Err("no keys detected. Check `data.read` and the working directory.".into());
     }
     let used = s.scan()?;
-    let missing_report = missing::report(&s.cfg, &s.store, &used, &s.locales, &MissingType::ALL);
-    let unused_report = unused::report(&s.cfg, &s.store, &used, &s.locales);
-    let consistent = interpolations::inconsistent(&s.cfg, &s.store, &s.locales);
-    let reserved = interpolations::reserved(&s.store, &s.locales);
-    // `health` never writes. This step only compares the emitted bytes against
-    // the file on disk.
-    let normalized = normalize::plan(&s.cfg, &s.store, &s.locales, false)?;
+    let checks = vec![
+        Check::Missing(missing::report(
+            &s.cfg,
+            &s.store,
+            &used,
+            &s.locales,
+            &MissingType::ALL,
+        )),
+        Check::Unused(unused::report(&s.cfg, &s.store, &used, &s.locales)),
+        Check::ConsistentInterpolations(interpolations::inconsistent(&s.cfg, &s.store, &s.locales)),
+        Check::ReservedInterpolations(interpolations::reserved(&s.store, &s.locales)),
+        // `health` never writes. This step only compares the emitted bytes
+        // against the file on disk.
+        Check::Normalized(normalize::plan(&s.cfg, &s.store, &s.locales, false)?),
+    ];
 
-    let found = [
-        missing_report.outcome(),
-        unused_report.outcome(),
-        consistent.outcome(),
-        reserved.outcome(),
-        normalized.outcome(),
-    ]
-    .contains(&Outcome::Found);
+    let found = checks.iter().any(|c| c.outcome() == Outcome::Found);
 
     if s.json {
-        #[derive(Serialize)]
-        struct Health<'a> {
-            check: &'static str,
-            passed: bool,
-            config_digest: &'a str,
-            locales: &'a [String],
-            stats: &'a ForestStats,
-            missing: &'a missing::MissingReport,
-            unused: &'a unused::UnusedReport,
-            check_consistent_interpolations: &'a interpolations::InterpolationReport,
-            check_reserved_interpolations: &'a interpolations::InterpolationReport,
-            check_normalized: &'a normalize::NormalizeReport,
-        }
-        let out = Health {
-            check: "health",
-            passed: !found,
-            config_digest: &s.cfg.digest,
-            locales: &s.locales,
-            stats: &stats,
-            missing: &missing_report,
-            unused: &unused_report,
-            check_consistent_interpolations: &consistent,
-            check_reserved_interpolations: &reserved,
-            check_normalized: &normalized,
-        };
         println!(
             "{}",
-            serde_json::to_string_pretty(&out).map_err(|e| e.to_string())?
+            serde_json::to_string_pretty(&Health {
+                passed: !found,
+                config_digest: &s.cfg.digest,
+                locales: &s.locales,
+                stats: &stats,
+                checks: &checks,
+            })
+            .map_err(|e| e.to_string())?
         );
     } else {
         println!("{}", stats.to_text());
-        println!();
-        print!("{}", missing_report.to_text());
-        println!();
-        print!("{}", unused_report.to_text());
-        println!();
-        print!("{}", consistent.to_text());
-        println!();
-        print!("{}", reserved.to_text());
-        println!();
-        print!("{}", normalized.to_check_text());
+        for check in &checks {
+            println!();
+            print!("{}", check.to_text());
+        }
     }
     Ok(if found { EXIT_FOUND } else { EXIT_OK })
+}
+
+/// The `health` envelope: the shared four fields, the statistics header, then
+/// one field per check, named by `Check::name`.
+///
+/// Written by hand rather than derived, because the field names come from the
+/// checks at run time. A `serde_json::Map` would not do: without the
+/// `preserve_order` feature it is a `BTreeMap`, so the five reports would come
+/// out in alphabetical order instead of report order.
+struct Health<'a> {
+    passed: bool,
+    config_digest: &'a str,
+    locales: &'a [String],
+    stats: &'a ForestStats,
+    checks: &'a [Check],
+}
+
+impl Serialize for Health<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut map = serializer.serialize_map(Some(5 + self.checks.len()))?;
+        map.serialize_entry("check", "health")?;
+        map.serialize_entry("passed", &self.passed)?;
+        map.serialize_entry("config_digest", self.config_digest)?;
+        map.serialize_entry("locales", self.locales)?;
+        map.serialize_entry("stats", self.stats)?;
+        for check in self.checks {
+            map.serialize_entry(check.name(), check)?;
+        }
+        map.end()
+    }
 }
 
 /// ref: blocker B8. `--write` is required, `--dry-run` prints the diff, and a
