@@ -24,6 +24,9 @@ pub struct Finder {
     exclude: GlobSet,
     prefilter: AhoCorasick,
     paths: Vec<PathBuf>,
+    /// What `match_path` strips, so the globs see the path a config author
+    /// wrote them against.
+    root: PathBuf,
 }
 
 impl Finder {
@@ -43,6 +46,7 @@ impl Finder {
             exclude,
             prefilter: AhoCorasick::new(NEEDLES).expect("static needles compile"),
             paths,
+            root: cfg.root.clone(),
         })
     }
 
@@ -138,10 +142,26 @@ impl Finder {
         out.push(path);
     }
 
-    /// The path the globs are matched against. The gem matches the path exactly
-    /// as `Find.find` produced it, relative to the configured search path.
+    /// The path the globs are matched against: root-relative, and `/`-separated
+    /// whatever the platform separator is.
+    ///
+    /// The gem matches the path exactly as `Find.find` produced it. Its
+    /// `search.paths` entries are relative and it runs from the project root,
+    /// so that path is root-relative too, and a config glob is written against
+    /// it. Matching the absolute path instead cannot work: a pattern holding a
+    /// `*` never sees the leading `/Users/…` it would have to cover.
+    ///
+    /// A `search.paths` entry that is absolute, or that escapes the root, has
+    /// no root-relative form. Such a path is matched whole, which is what a
+    /// glob for it has to be written against anyway.
+    ///
+    /// ref: lib/i18n/tasks/scanners/files/file_finder.rb:34-50, and accepted
+    /// difference 26 for where this parts company with the gem.
     fn match_path(&self, path: &Path) -> String {
-        path.to_string_lossy().into_owned()
+        path.strip_prefix(&self.root)
+            .unwrap_or(path)
+            .to_string_lossy()
+            .replace('\\', "/")
     }
 }
 
@@ -150,13 +170,13 @@ impl Finder {
 fn build_globs(globs: &[String]) -> Result<GlobSet, String> {
     let mut b = GlobSetBuilder::new();
     for g in globs {
-        // A bare `app/webpack` must match the directory itself and the paths
-        // beneath it, the way pruning in `Find.find` does.
         b.add(Glob::new(g).map_err(|e| format!("bad glob `{g}`: {e}"))?);
+        // A wildcard-free `app/webpack` names a directory, and pruning in
+        // `Find.find` drops what is under it as well as the directory itself.
+        // One extra variant covers that. A pattern holding a `*` needs none:
+        // `*` crosses `/`, so it already reaches down.
         if !g.contains('*') {
             b.add(Glob::new(&format!("{g}/**")).map_err(|e| format!("bad glob `{g}`: {e}"))?);
-            b.add(Glob::new(&format!("**/{g}")).map_err(|e| format!("bad glob `{g}`: {e}"))?);
-            b.add(Glob::new(&format!("**/{g}/**")).map_err(|e| format!("bad glob `{g}`: {e}"))?);
         }
     }
     b.build().map_err(|e| e.to_string())
@@ -245,11 +265,55 @@ mod tests {
     fn search_only_selects_a_subset() {
         let root = project("only");
         assert_eq!(
-            found(&root, "search:\n  paths: [a]\n  only: ['*/a/a/**']\n"),
+            found(&root, "search:\n  paths: [a]\n  only: ['a/a/**']\n"),
             vec!["a/a/a.rb", "a/a/a/a.rb", "a/a/b.rb"]
         );
         // An empty `only` list is the same as none at all.
         assert_eq!(found(&root, "search:\n  paths: [a]\n  only: []\n").len(), 5);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A glob holding a `*` is matched against the root-relative path, the way
+    /// the gem matches the path `Find.find` yielded. Handing the globs an
+    /// absolute path instead makes `exclude` silently do nothing and `only`
+    /// silently match nothing, and an empty `only` makes `unused` report every
+    /// key in the project.
+    #[test]
+    fn a_wildcard_glob_is_matched_relative_to_the_root() {
+        let root = project("relative-globs");
+        assert_eq!(
+            found(&root, "search:\n  paths: [.]\n  exclude: ['a/*/b.rb']\n"),
+            vec!["a.rb", "a/a/a.rb", "a/a/a/a.rb", "a/b/a.rb"]
+        );
+        assert_eq!(
+            found(&root, "search:\n  paths: [.]\n  only: ['a/b/**']\n"),
+            vec!["a/b/a.rb", "a/b/b.rb"]
+        );
+        // The other half of the same change: an absolute glob no longer
+        // matches, because the target it is matched against is relative.
+        let absolute = format!(
+            "search:\n  paths: [.]\n  only: ['{}/a/b/**']\n",
+            root.display()
+        );
+        assert!(found(&root, &absolute).is_empty());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A wildcard-free glob still has to prune the directory it names and
+    /// everything under it, which is what pruning in `Find.find` does.
+    #[test]
+    fn a_wildcard_free_glob_prunes_the_directory_it_names() {
+        let root = project("prune-dir");
+        assert_eq!(
+            found(&root, "search:\n  paths: [.]\n  exclude: ['a/a']\n"),
+            vec!["a.rb", "a/b/a.rb", "a/b/b.rb"]
+        );
+        // At the place it names, though, and not at every depth: `a/a` is not
+        // `**/a/a`, and neither is what the gem's `fnmatch` would match.
+        assert_eq!(
+            found(&root, "search:\n  paths: [.]\n  exclude: ['a']\n"),
+            vec!["a.rb"]
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -258,7 +322,7 @@ mod tests {
     fn search_exclude_prunes_a_subtree() {
         let root = project("exclude");
         assert_eq!(
-            found(&root, "search:\n  paths: [.]\n  exclude: ['*/a/a']\n"),
+            found(&root, "search:\n  paths: [.]\n  exclude: ['a/a']\n"),
             vec!["a.rb", "a/b/a.rb", "a/b/b.rb"]
         );
         let _ = std::fs::remove_dir_all(&root);
@@ -286,18 +350,12 @@ mod tests {
         assert!(
             found(
                 &root,
-                "search:\n  paths: [a/b/a.rb]\n  exclude: ['*/a/b/a.rb']\n"
+                "search:\n  paths: [a/b/a.rb]\n  exclude: ['a/b/a.rb']\n"
             )
             .is_empty()
         );
         // Named directly but outside `only`.
-        assert!(
-            found(
-                &root,
-                "search:\n  paths: [a/b/a.rb]\n  only: ['*/a/a/**']\n"
-            )
-            .is_empty()
-        );
+        assert!(found(&root, "search:\n  paths: [a/b/a.rb]\n  only: ['a/a/**']\n").is_empty());
         let _ = std::fs::remove_dir_all(&root);
     }
 
