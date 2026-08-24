@@ -25,20 +25,21 @@ fn main() -> Result<(), String> {
     );
 
     let t = Instant::now();
-    let found = Finder::new(&cfg)?.discover();
+    let candidates = Finder::new(&cfg)?.discover();
     println!(
-        "discover         {:>8.0?}  ({} files, {} prefiltered)",
+        "discover         {:>8.0?}  ({} candidates)",
         t.elapsed(),
-        found.files.len(),
-        found.prefiltered
+        candidates.len()
     );
 
     let t = Instant::now();
     let used = UsedKeys::scan(&cfg)?;
     println!(
-        "discover + scan  {:>8.0?}  ({} keys)",
+        "discover + scan  {:>8.0?}  ({} keys, {} scanned, {} prefiltered)",
         t.elapsed(),
-        used.keys.len()
+        used.keys.len(),
+        used.files_scanned,
+        used.files_prefiltered
     );
     println!("total            {:>8.0?}", t0.elapsed());
     Ok(())
