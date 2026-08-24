@@ -27,17 +27,13 @@ const EXIT_FAILURE: u8 = 2;
     version
 )]
 struct Cli {
-    /// Worker threads for the source scan. Defaults to the core count.
-    ///
-    /// `--jobs 1` scans on one thread, for debugging. The output is identical
-    /// either way; a parallel run that reorders anything is a bug.
-    #[arg(long, short = 'j', global = true)]
-    jobs: Option<usize>,
     #[command(subcommand)]
     command: Command,
 }
 
-/// Sizes the `rayon` pool the scan fans out over.
+/// Sizes the `rayon` pool the scan fans out over. Called once, from
+/// `Session::open`, so `--jobs` belongs to the commands that read a project and
+/// not to `migrate-config`, which scans nothing.
 ///
 /// Without `--jobs`, `rayon` uses the core count.
 fn install_pool(jobs: Option<usize>) -> Result<(), String> {
@@ -76,6 +72,12 @@ struct Common {
     /// directory, which is what the gem uses.
     #[arg(long, global = true)]
     root: Option<PathBuf>,
+    /// Worker threads for the source scan. Defaults to the core count.
+    ///
+    /// `--jobs 1` scans on one thread, for debugging. The output is identical
+    /// either way; a parallel run that reorders anything is a bug.
+    #[arg(long, short = 'j')]
+    jobs: Option<usize>,
 }
 
 impl Common {
@@ -251,6 +253,7 @@ struct Session {
 
 impl Session {
     fn open(common: &Common) -> Result<Session, String> {
+        install_pool(common.jobs)?;
         let cfg = Config::load(&common.config, common.root.as_deref())?;
         let store = Store::load(&cfg)?;
         for warning in &store.warnings {
@@ -272,7 +275,6 @@ impl Session {
 
 fn run() -> Result<u8, String> {
     let cli = Cli::parse();
-    install_pool(cli.jobs)?;
     match &cli.command {
         Command::Missing { common, types } => {
             let s = Session::open(common)?;

@@ -36,9 +36,11 @@ i18n-tasks-rs migrate-config [-i/--from PATH] [-o/--to PATH]
                              [--write] [--force]
 ```
 
-Global flags: `-c/--config PATH` (default `config/i18n-tasks-rs.yml`),
-`--root PATH` (default the working directory), `-f/--format text|json`,
-`-j/--jobs N`.
+Every command that reads a project — that is, all of them except
+`migrate-config` — takes `-c/--config PATH` (default
+`config/i18n-tasks-rs.yml`), `--root PATH` (default the working directory),
+`-f/--format text|json` and `-j/--jobs N`. `migrate-config` takes `--root`
+alone, because it scans nothing.
 
 Exit codes match the gem: **0** the check passed, **1** the check found
 something, **2** the tool itself failed.
