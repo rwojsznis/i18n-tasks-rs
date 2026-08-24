@@ -17,11 +17,33 @@
 //! `EMOJI_REGEX` post-processing has no counterpart here.
 
 use crate::data::load::Value;
+use std::collections::HashMap;
+
+// Counts the sibling keys a lookup had to examine, so a test can pin the
+// per-insert cost of `insert_segments`. Thread-local, because the harness runs
+// each test on its own thread.
+#[cfg(test)]
+thread_local! {
+    static SIBLINGS_EXAMINED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn note_siblings_examined(n: usize) {
+    SIBLINGS_EXAMINED.with(|c| c.set(c.get() + n));
+}
 
 /// A nested mapping, rebuilt from the flat key map for one output file.
+///
+/// `entries` holds the children in insertion order, which is what
+/// `data.keep_order` preserves and what `sort` rewrites. `index` gives each
+/// child's position in it, so an insert does not scan the siblings already
+/// there — a parent with a few thousand keys is ordinary, and a scan makes the
+/// build quadratic. The two are kept in step by `push_entry` and by `sort`,
+/// which rebuilds the index after it moves the entries.
 #[derive(Debug, Default, Clone)]
 pub struct Tree {
     entries: Vec<(String, Entry)>,
+    index: HashMap<String, usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -59,13 +81,15 @@ impl Tree {
         let mut parts = segments.iter().copied().peekable();
         while let Some(seg) = parts.next() {
             let last = parts.peek().is_none();
-            let pos = node.entries.iter().position(|(k, _)| k == seg);
+            let pos = node.position_of(seg);
             if last {
                 match pos {
                     // The mapping wins, so an existing map is left alone.
                     Some(i) if matches!(node.entries[i].1, Entry::Map(_)) => {}
                     Some(i) => node.entries[i].1 = Entry::Leaf(value),
-                    None => node.entries.push((seg.to_string(), Entry::Leaf(value))),
+                    None => {
+                        node.push_entry(seg, Entry::Leaf(value));
+                    }
                 }
                 return;
             }
@@ -76,17 +100,28 @@ impl Tree {
                     }
                     i
                 }
-                None => {
-                    node.entries
-                        .push((seg.to_string(), Entry::Map(Tree::new())));
-                    node.entries.len() - 1
-                }
+                None => node.push_entry(seg, Entry::Map(Tree::new())),
             };
             let Entry::Map(child) = &mut node.entries[i].1 else {
                 unreachable!("the branch above turned this into a map");
             };
             node = child;
         }
+    }
+
+    /// Finds a child by name.
+    fn position_of(&self, seg: &str) -> Option<usize> {
+        #[cfg(test)]
+        note_siblings_examined(1);
+        self.index.get(seg).copied()
+    }
+
+    /// Appends a child and records where it went. Returns its position.
+    fn push_entry(&mut self, seg: &str, entry: Entry) -> usize {
+        let i = self.entries.len();
+        self.entries.push((seg.to_string(), entry));
+        self.index.insert(seg.to_string(), i);
+        i
     }
 
     /// Sorts every level, recursively.
@@ -96,7 +131,9 @@ impl Tree {
     /// needed. `data.keep_order` skips this call.
     pub fn sort(&mut self) {
         self.entries.sort_by(|a, b| a.0.cmp(&b.0));
-        for (_, entry) in &mut self.entries {
+        self.index.clear();
+        for (i, (key, entry)) in self.entries.iter_mut().enumerate() {
+            self.index.insert(key.clone(), i);
             if let Entry::Map(child) = entry {
                 child.sort();
             }
@@ -493,6 +530,40 @@ mod tests {
 
     fn scalar(v: &str) -> String {
         format_scalar(&s(v), 1)
+    }
+
+    /// H17: a lookup must not cost one comparison per sibling already there.
+    /// A locale file with a few thousand keys under one parent is ordinary, and
+    /// a linear scan makes that quadratic.
+    #[test]
+    fn inserting_a_sibling_does_not_scan_the_siblings_before_it() {
+        const N: usize = 500;
+        let mut t = Tree::new();
+        SIBLINGS_EXAMINED.with(|c| c.set(0));
+        for i in 0..N {
+            t.insert(&format!("parent.key{i:04}"), s("v"));
+        }
+        let examined = SIBLINGS_EXAMINED.with(std::cell::Cell::get);
+        // Two lookups per key — `parent`, then the leaf — so the floor is 2N.
+        assert!(
+            examined < 4 * N,
+            "{examined} sibling comparisons for {N} inserts; want O(N), not O(N^2)"
+        );
+    }
+
+    /// `sort` moves the entries, so the index it left behind has to be the
+    /// new one. A stale index would place a second entry under a name that is
+    /// already there, and the emitter would write the key twice.
+    #[test]
+    fn an_insert_after_a_sort_finds_the_entries_the_sort_moved() {
+        let mut t = tree(&[("b", s("B")), ("a", s("A")), ("m.q", s("Q"))]);
+        t.sort();
+        t.insert("b", s("B2"));
+        t.insert("m.p", s("P"));
+        assert_eq!(
+            emit_locale("en", &t),
+            "---\nen:\n  a: A\n  b: B2\n  m:\n    q: Q\n    p: P\n"
+        );
     }
 
     #[test]
