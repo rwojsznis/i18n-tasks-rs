@@ -34,6 +34,13 @@ jobs:
       - name: cargo clippy
         run: cargo clippy --all-targets -- -D warnings
 
+      # Four dependencies were declared and never imported. `cargo clippy`
+      # cannot see that, so this is what keeps the manifest honest.
+      - name: cargo machete
+        run: |
+          cargo install --locked cargo-machete
+          cargo machete
+
   test:
     name: Test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -51,6 +58,11 @@ jobs:
 
       - name: cargo test
         run: cargo test --all-targets
+
+      # `Pattern::run`, `flatten` and the YAML reader all recurse, and a release
+      # build has different stack headroom and no overflow checks.
+      - name: cargo test --release
+        run: cargo test --release --all-targets
 
       - name: doc tests
         run: cargo test --doc

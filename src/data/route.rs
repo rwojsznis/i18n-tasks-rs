@@ -22,6 +22,7 @@ pub struct Destination {
 ///
 /// A bare path entry is the same as `['*', path]`, which is what
 /// `compile_routes` does.
+#[derive(Debug)]
 pub struct PatternRouter {
     routes: Vec<(Pattern, String)>,
     /// For the error message on an unroutable key.
@@ -58,6 +59,10 @@ impl PatternRouter {
     ///
     /// The gem substitutes the locale first and the captures second, so a
     /// capture that holds a `%{locale}` is not expanded twice. Same here.
+    ///
+    /// # Errors
+    ///
+    /// No `data.write` rule matches the key. The message lists the rules.
     pub fn route_key(&self, locale: &str, key: &str) -> Result<PathBuf, String> {
         for (pattern, path) in &self.routes {
             let Some(caps) = pattern.captures(key) else {
@@ -93,7 +98,11 @@ fn substitute_captures(path: &str, key: &str, caps: &crate::pattern::Captures) -
             i += 2;
             continue;
         }
-        let ch = path[i..].chars().next().unwrap();
+        // See `config::interpolate_locale`: the `else` arm restates the loop
+        // condition.
+        let Some(ch) = path[i..].chars().next() else {
+            break;
+        };
         out.push(ch);
         i += ch.len_utf8();
     }
@@ -115,13 +124,16 @@ pub fn replace_locale(path: &str, from: &str, to: &str) -> String {
     while i < bytes.len() {
         let before_ok = i == 0 || matches!(bytes[i - 1], b'/' | b'.' | b'-');
         let after = bytes.get(i + from.len());
-        let after_ok = matches!(after, Some(b'/') | Some(b'.'));
+        let after_ok = matches!(after, Some(b'/' | b'.'));
         if before_ok && after_ok && path[i..].starts_with(from) {
             out.push_str(to);
             i += from.len();
             continue;
         }
-        let ch = path[i..].chars().next().unwrap();
+        // See `config::interpolate_locale`.
+        let Some(ch) = path[i..].chars().next() else {
+            break;
+        };
         out.push(ch);
         i += ch.len_utf8();
     }
@@ -135,6 +147,7 @@ pub fn replace_locale(path: &str, from: &str, to: &str) -> String {
 /// A genuinely new key falls through to `data.write`, so the router borrows a
 /// compiled `PatternRouter` rather than compiling its own — one set of rules
 /// per command, whichever router is in charge.
+#[derive(Debug)]
 pub struct ConservativeRouter<'a> {
     store: &'a Store,
     fallback: &'a PatternRouter,
@@ -145,6 +158,10 @@ impl<'a> ConservativeRouter<'a> {
         ConservativeRouter { store, fallback }
     }
 
+    /// # Errors
+    ///
+    /// A key the store has never seen falls through to the pattern router, and
+    /// fails when no `data.write` rule matches it.
     pub fn route_key(&self, locale: &str, key: &str) -> Result<PathBuf, String> {
         if let Some(leaf) = self.store.tree(locale).and_then(|t| t.get(key)) {
             return Ok(leaf.path.to_path_buf());
@@ -166,6 +183,10 @@ impl<'a> ConservativeRouter<'a> {
 ///
 /// `force_pattern` is the `-p` / `--pattern-router` flag, which makes keys
 /// physically move to where `data.write` says they belong.
+///
+/// # Errors
+///
+/// The locale has no data, or a key cannot be routed.
 pub fn route(
     cfg: &Config,
     store: &Store,
@@ -251,6 +272,21 @@ mod tests {
         );
     }
 
+    /// See `config::interpolate_locale`: two of the byte-scan loops are here.
+    #[test]
+    fn a_multi_byte_path_survives_both_rewrites() {
+        assert_eq!(
+            replace_locale("config/переводы/de/a.yml", "de", "en"),
+            "config/переводы/en/a.yml"
+        );
+        let pattern = Pattern::compile("{ü,x}.*");
+        let caps = pattern.captures("ü.key").expect("the key matches");
+        assert_eq!(
+            substitute_captures("config/переводы/\\1.yml", "ü.key", &caps),
+            "config/переводы/ü.yml"
+        );
+    }
+
     /// Full port of spec/locale_pathname_spec.rb.
     #[test]
     fn replace_locale_matches_the_gem_spec() {
@@ -283,8 +319,8 @@ mod tests {
         let store = Store {
             base_locale: cfg.base_locale.clone(),
             locales: Vec::new(),
-            trees: Default::default(),
-            external: Default::default(),
+            trees: HashMap::default(),
+            external: HashMap::default(),
             warnings: Vec::new(),
         };
         assert!(origin_paths(&store, "de").is_empty());
@@ -357,7 +393,7 @@ mod tests {
             base_locale: cfg.base_locale.clone(),
             locales: vec!["de".to_string()],
             trees: HashMap::from([("de".to_string(), tree)]),
-            external: Default::default(),
+            external: HashMap::default(),
             warnings: Vec::new(),
         };
 

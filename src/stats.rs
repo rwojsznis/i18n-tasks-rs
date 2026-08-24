@@ -23,6 +23,10 @@ pub struct ForestStats {
     pub value_chars_avg: usize,
 }
 
+#[allow(
+    clippy::cast_precision_loss,
+    reason = "the counts are leaf counts; 2^53 of them do not fit in memory"
+)]
 pub fn forest_stats(store: &Store, locales: &[String]) -> ForestStats {
     let mut key_count = 0usize;
     let mut segments = 0usize;

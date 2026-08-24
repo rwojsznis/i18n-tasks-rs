@@ -63,6 +63,12 @@ impl Generated {
 }
 
 /// Detects, renders, and reads the result back. `to` is only used in messages.
+///
+/// # Errors
+///
+/// Nothing here fails today: detection that cannot read a file records a note,
+/// and a generated config that does not load is reported in the header rather
+/// than returned. The `Result` is the shape every command entry point has.
 pub fn generate(root: &Path, to: &Path) -> Result<Generated, String> {
     let mut detected = detect(root);
     // The header reports what the settings read, so the file is rendered

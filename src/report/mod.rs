@@ -129,7 +129,7 @@ pub fn render_table(title: &str, headers: &[&str], rows: &[Vec<String>]) -> Stri
     let line = |cells: &[String]| -> String {
         let mut s = String::new();
         for (i, w) in width.iter().enumerate().take(cols) {
-            let cell = cells.get(i).map(String::as_str).unwrap_or("");
+            let cell = cells.get(i).map_or("", String::as_str);
             s.push_str(cell);
             if i + 1 < cols {
                 for _ in cell.chars().count()..w + 2 {
@@ -140,7 +140,7 @@ pub fn render_table(title: &str, headers: &[&str], rows: &[Vec<String>]) -> Stri
         s.trim_end().to_string()
     };
     out.push_str(&line(
-        &headers.iter().map(|h| h.to_string()).collect::<Vec<_>>(),
+        &headers.iter().map(ToString::to_string).collect::<Vec<_>>(),
     ));
     out.push('\n');
     out.push_str(&"-".repeat(width.iter().sum::<usize>() + 2 * (cols - 1)));

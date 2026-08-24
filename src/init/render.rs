@@ -95,13 +95,13 @@ pub(super) fn render(d: &Detected, verified: Option<&Verification>) -> String {
     for path in &d.search_paths {
         out.push_str(&format!("    - {path}\n"));
     }
-    if !d.exclude.is_empty() {
+    if d.exclude.is_empty() {
+        out.push_str("  # exclude: []\n");
+    } else {
         out.push_str("  exclude:\n");
         for path in &d.exclude {
             out.push_str(&format!("    - {path}\n"));
         }
-    } else {
-        out.push_str("  # exclude: []\n");
     }
     if d.relative_roots.is_empty() {
         // Not omitted: leaving the key out would restore the gem's five

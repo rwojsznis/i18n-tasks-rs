@@ -116,6 +116,11 @@ impl NormalizeReport {
 ///   would erase the first;
 /// * a destination that already holds a locale outside this run, because a
 ///   file is written from one locale's keys only.
+///
+/// # Errors
+///
+/// A key cannot be routed, a locale in `locales` has no data, or either guard
+/// above fires. Nothing is written either way — `plan` does not touch disk.
 pub fn plan(
     cfg: &Config,
     store: &Store,
@@ -243,6 +248,12 @@ fn display_path(cfg: &Config, path: &Path) -> String {
 /// The planned `path` is written verbatim. It is deliberately not rebuilt from
 /// `display`, which cannot be reversed for a non-UTF-8 component or for a name
 /// holding a `\`.
+///
+/// # Errors
+///
+/// A file cannot be written, a parent directory cannot be created, or an
+/// emptied file cannot be deleted. The plan is applied in order and stops at
+/// the first failure, so a partial write is possible.
 pub fn apply(report: &NormalizeReport) -> Result<(), String> {
     for change in &report.changes {
         let path = change.path.as_path();

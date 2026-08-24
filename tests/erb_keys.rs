@@ -49,7 +49,7 @@ fn line_of(scan: &FileScan, key: &str) -> Vec<usize> {
         .filter(|(k, _)| k == key)
         .map(|(_, o)| o.line_num)
         .collect();
-    lines.sort();
+    lines.sort_unstable();
     lines
 }
 

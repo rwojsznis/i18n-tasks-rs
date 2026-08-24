@@ -18,6 +18,10 @@ pub(super) enum Decision {
 }
 
 /// `section` is `None` at the top level, otherwise the parent key.
+#[allow(
+    clippy::match_same_arms,
+    reason = "the arms are grouped by config section, which merging would scramble"
+)]
 pub(super) fn decide(key: &str, value: &Node, section: Option<&str>) -> Decision {
     // A key with no value is the gem template's way of showing an example, e.g.
     // `external:` followed by commented-out samples. Keeping it would hand the
@@ -40,7 +44,7 @@ pub(super) fn decide(key: &str, value: &Node, section: Option<&str>) -> Decision
 
         (Some("data"), "read" | "write" | "external" | "keep_order") => Decision::Keep,
         (Some("data"), "router") => match value.as_str() {
-            Some("conservative_router") | Some("pattern_router") => Decision::Keep,
+            Some("conservative_router" | "pattern_router") => Decision::Keep,
             Some(other) => Decision::Drop(format!(
                 "`{other}` is not one of conservative_router, pattern_router; \
                  the default conservative_router applies"
@@ -114,9 +118,8 @@ pub(super) fn nested(
             )),
             // Neither section has a third level, so `Recurse` cannot appear.
             Decision::Recurse | Decision::Drop(_) => {
-                let reason = match decide(name, v, Some(section)) {
-                    Decision::Drop(reason) => reason,
-                    _ => unreachable!("no config section nests twice"),
+                let Decision::Drop(reason) = decide(name, v, Some(section)) else {
+                    unreachable!("no config section nests twice")
                 };
                 dropped.push(Dropped {
                     key: path,

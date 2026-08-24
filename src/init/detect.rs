@@ -482,7 +482,7 @@ fn uses_relative_key(bytes: &[u8]) -> bool {
                 j += 1;
             }
         }
-        if matches!(bytes.get(j), Some(b'"') | Some(b'\'')) && bytes.get(j + 1) == Some(&b'.') {
+        if matches!(bytes.get(j), Some(b'"' | b'\'')) && bytes.get(j + 1) == Some(&b'.') {
             return true;
         }
         i += 1;

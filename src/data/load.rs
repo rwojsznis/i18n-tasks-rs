@@ -38,10 +38,11 @@ impl Value {
     /// ref: lib/i18n/tasks/stats.rb
     pub fn to_display_string(&self) -> String {
         match self {
-            Value::Str(s) => s.clone(),
+            // A plain scalar and a quoted one differ only in how they were
+            // written, so `#to_s` cannot tell them apart.
+            Value::Str(s) | Value::Plain(s) => s.clone(),
             Value::Nil => String::new(),
             Value::Bool(b) => b.to_string(),
-            Value::Plain(s) => s.clone(),
             // Ruby `Array#to_s` and `Hash#to_s` are the `inspect` forms.
             Value::Seq(_) | Value::Map(_) => self.inspect(),
         }
@@ -251,6 +252,11 @@ impl Store {
         self.trees.get(locale).is_some_and(|t| t.has_key(key))
     }
 
+    /// # Errors
+    ///
+    /// No `data.read` pattern matched a file and `locales` is not configured,
+    /// or a locale file does not parse — which includes the YAML this port
+    /// refuses to read at all, such as an alias or a tag.
     pub fn load(cfg: &Config) -> Result<Store, String> {
         let mut warnings = Vec::new();
         let locales = match &cfg.locales {
@@ -356,7 +362,10 @@ fn locale_pattern_re(pattern: &str) -> Option<Regex> {
             out.push_str(if i - start == 2 { ".*" } else { "[^/]*?" });
             continue;
         }
-        let ch = pattern[i..].chars().next().unwrap();
+        // See `interpolate_locale`: the `else` arm restates the loop condition.
+        let Some(ch) = pattern[i..].chars().next() else {
+            break;
+        };
         match ch {
             '.' | '/' | '\\' => {
                 out.push('\\');
@@ -481,7 +490,10 @@ fn flatten(
             out.insert(Leaf {
                 key: prefix.join("."),
                 value: to_value(node, path, false)?,
-                depth: prefix.len() as u16,
+                // `flatten` recurses once per level, so the stack gives out
+                // long before 65 535 nested maps; saturating keeps the count
+                // monotone if it ever did not.
+                depth: u16::try_from(prefix.len()).unwrap_or(u16::MAX),
                 path: Arc::clone(file),
                 odd_segments: prefix.iter().any(|s| s.contains('.')).then(|| {
                     prefix
@@ -741,6 +753,21 @@ mod tests {
         assert_eq!(
             normalize_locale_list(&["fr".into(), "de".into(), "en".into()], "de"),
             vec!["de", "en", "fr"]
+        );
+    }
+
+    /// See `config::interpolate_locale`: the same byte-scan loop, so the same
+    /// invariant. A multi-byte directory name must not be cut in half, and it
+    /// must not swallow the group either.
+    #[test]
+    fn a_multi_byte_read_pattern_still_names_the_locale() {
+        assert_eq!(
+            locale_of("config/переводы/%{locale}.yml", "config/переводы/ru.yml"),
+            Some("ru".to_string())
+        );
+        assert_eq!(
+            locale_of("config/переводы/%{locale}.yml", "config/x/ru.yml"),
+            None
         );
     }
 

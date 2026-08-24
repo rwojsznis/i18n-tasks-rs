@@ -61,7 +61,7 @@ fn shared_flags_are_accepted_after_the_subcommand() {
     ] {
         let (code, text) = run(&flags);
         assert_eq!(code, 0, "{flags:?} failed: {text}");
-        assert!(text.contains("a"), "{flags:?} printed nothing: {text}");
+        assert!(text.contains('a'), "{flags:?} printed nothing: {text}");
     }
 }
 

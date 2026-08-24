@@ -97,6 +97,12 @@ impl fmt::Display for YamlError {
 impl std::error::Error for YamlError {}
 
 /// Parses the first document of `src`. Returns `None` for an empty document.
+///
+/// # Errors
+///
+/// The source is not valid YAML, or it uses an anchor, an alias or a tag. All
+/// three are refused rather than resolved, because `normalize` would write the
+/// resolved form back and lose them.
 pub fn parse(src: &str, path: &Path) -> Result<Option<Node>, YamlError> {
     let disp = path.display().to_string();
     let err = |line: usize, message: String| YamlError {
@@ -123,15 +129,11 @@ pub fn parse(src: &str, path: &Path) -> Result<Option<Node>, YamlError> {
                         .into(),
                 ));
             }
-            Event::Scalar(_, _, anchor_id, tag) => {
-                if *anchor_id != 0 {
-                    return Err(err(line, anchor_msg()));
-                }
-                if let Some(t) = tag {
-                    return Err(err(line, tag_msg(&t.to_string())));
-                }
-            }
-            Event::SequenceStart(anchor_id, tag) | Event::MappingStart(anchor_id, tag) => {
+            // An anchor or a tag is refused wherever it appears, so a scalar
+            // and the start of a collection are the same case here.
+            Event::Scalar(_, _, anchor_id, tag)
+            | Event::SequenceStart(anchor_id, tag)
+            | Event::MappingStart(anchor_id, tag) => {
                 if *anchor_id != 0 {
                     return Err(err(line, anchor_msg()));
                 }
