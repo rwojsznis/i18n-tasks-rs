@@ -11,6 +11,7 @@
 use crate::config::{Config, interpolate_locale};
 use crate::walk::{Descend, walk};
 use crate::yaml::{self, Node, Resolved};
+use rayon::prelude::*;
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -113,6 +114,24 @@ thread_local! {
 #[cfg(test)]
 fn note_siblings_examined(n: usize) {
     SIBLINGS_EXAMINED.with(|c| c.set(c.get() + n));
+}
+
+// Locales read on the calling thread. `Store::load` fans the locales out over
+// rayon, which runs the whole job inside the pool when the caller is not a
+// worker, so a parallel load leaves this at zero.
+#[cfg(test)]
+thread_local! {
+    static LOCALES_READ: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn note_locale_read() {
+    LOCALES_READ.with(|c| c.set(c.get() + 1));
+}
+
+#[cfg(test)]
+fn locales_read_on_this_thread() -> usize {
+    LOCALES_READ.with(std::cell::Cell::get)
 }
 
 #[derive(Debug, Default)]
@@ -258,7 +277,6 @@ impl Store {
     /// or a locale file does not parse — which includes the YAML this port
     /// refuses to read at all, such as an alias or a tag.
     pub fn load(cfg: &Config) -> Result<Store, String> {
-        let mut warnings = Vec::new();
         let locales = match &cfg.locales {
             Some(l) => normalize_locale_list(l, &cfg.base_locale),
             None => {
@@ -274,20 +292,9 @@ impl Store {
             }
         };
 
-        let mut trees = HashMap::new();
-        for locale in &locales {
-            trees.insert(
-                locale.clone(),
-                read_locale(cfg, locale, &cfg.data.read, &mut warnings)?,
-            );
-        }
-        let mut external = HashMap::new();
-        for locale in &locales {
-            external.insert(
-                locale.clone(),
-                read_locale(cfg, locale, &cfg.data.external, &mut warnings)?,
-            );
-        }
+        let (trees, mut warnings) = read_all(cfg, &locales, &cfg.data.read)?;
+        let (external, external_warnings) = read_all(cfg, &locales, &cfg.data.external)?;
+        warnings.extend(external_warnings);
         Ok(Store {
             base_locale: cfg.base_locale.clone(),
             locales,
@@ -296,6 +303,36 @@ impl Store {
             warnings,
         })
     }
+}
+
+/// One tree per locale, plus the warnings the reads produced.
+///
+/// The locales share nothing, so they are read in parallel. Determinism is the
+/// constraint — `tests/jobs.rs` asserts every command is byte-identical at
+/// `--jobs 1`, `2`, `8`, `16` and the default — so each locale collects its own
+/// warnings and the results are folded back in locale order. That ordering also
+/// decides which of several broken locales names the error: the first one, as
+/// the serial loop gave.
+fn read_all(
+    cfg: &Config,
+    locales: &[String],
+    patterns: &[String],
+) -> Result<(HashMap<String, LocaleTree>, Vec<String>), String> {
+    let per_locale: Vec<Result<(LocaleTree, Vec<String>), String>> = locales
+        .par_iter()
+        .map(|locale| {
+            let mut warnings = Vec::new();
+            read_locale(cfg, locale, patterns, &mut warnings).map(|tree| (tree, warnings))
+        })
+        .collect();
+    let mut trees = HashMap::with_capacity(locales.len());
+    let mut warnings = Vec::new();
+    for (locale, result) in locales.iter().zip(per_locale) {
+        let (tree, locale_warnings) = result?;
+        trees.insert(locale.clone(), tree);
+        warnings.extend(locale_warnings);
+    }
+    Ok((trees, warnings))
 }
 
 /// ref: lib/i18n/tasks/locale_list.rb#normalize_locale_list
@@ -401,6 +438,8 @@ fn read_locale(
     patterns: &[String],
     warnings: &mut Vec<String>,
 ) -> Result<LocaleTree, String> {
+    #[cfg(test)]
+    note_locale_read();
     let mut tree = LocaleTree {
         locale: locale.to_string(),
         ..Default::default()
@@ -662,6 +701,105 @@ fn fits_segment(path: &Path, is_last: bool) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A project of its own per test, so one test's leftovers cannot reach
+    /// another. The config file itself is never written: `Config::parse` takes
+    /// the source, and only the path it names in an error.
+    fn project(name: &str, files: &[(String, String)]) -> (PathBuf, Config) {
+        let root = std::env::temp_dir().join(format!("i18n-tasks-rs-load-{name}"));
+        let _ = std::fs::remove_dir_all(&root);
+        for (rel, body) in files {
+            let path = root.join(rel);
+            std::fs::create_dir_all(path.parent().expect("a file has a parent")).unwrap();
+            std::fs::write(path, body).unwrap();
+        }
+        let src = format!(
+            "base_locale: en\nlocales: [{}]\ndata:\n  read:\n    - config/locales/%{{locale}}.yml\n",
+            LOCALES.join(", ")
+        );
+        let cfg =
+            Config::parse(&src, &root.join("config/i18n-tasks-rs.yml"), root.clone()).unwrap();
+        (root, cfg)
+    }
+
+    /// Enough locales that a serial read is plainly different from a parallel
+    /// one. `en` is the base, so the load order is `en` and then the rest
+    /// sorted.
+    const LOCALES: [&str; 4] = ["en", "de", "fr", "it"];
+
+    /// One file per locale, with `%{locale}` in the body replaced by its name.
+    fn locale_files(body: &str) -> Vec<(String, String)> {
+        LOCALES
+            .iter()
+            .map(|l| {
+                (
+                    format!("config/locales/{l}.yml"),
+                    body.replace("%{locale}", l),
+                )
+            })
+            .collect()
+    }
+
+    /// The locales share nothing, so `Store::load` fans them out over rayon.
+    /// A rayon job started from a thread that is not a pool worker runs
+    /// entirely inside the pool, so a parallel load reads no locale on the
+    /// calling thread, where a serial loop reads every one of them here.
+    #[test]
+    fn no_locale_is_read_on_the_calling_thread() {
+        let (root, cfg) = project("offthread", &locale_files("%{locale}:\n  a: A\n"));
+        let before = locales_read_on_this_thread();
+        let store = Store::load(&cfg).unwrap();
+        assert_eq!(store.locales.len(), LOCALES.len());
+        assert_eq!(
+            locales_read_on_this_thread() - before,
+            0,
+            "the locales were read on the calling thread, so the load is serial"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// `warnings` is the one thing every locale writes to, and `--jobs` must
+    /// not change a byte of the output, so each locale collects its own and the
+    /// lists are joined in locale order.
+    #[test]
+    fn warnings_stay_in_locale_order() {
+        let (root, cfg) = project(
+            "warnorder",
+            &locale_files("%{locale}:\n  a: A\n  ~: dropped\n"),
+        );
+        let store = Store::load(&cfg).unwrap();
+        let named: Vec<&str> = store
+            .warnings
+            .iter()
+            .map(|w| {
+                assert!(w.contains("nil key"), "{w}");
+                LOCALES
+                    .into_iter()
+                    .find(|l| w.contains(&format!("/{l}.yml")))
+                    .expect("a warning names the file it comes from")
+            })
+            .collect();
+        assert_eq!(named, store.locales);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Two broken locales must always give the same message: the first one in
+    /// locale order, as the serial loop gave.
+    #[test]
+    fn the_first_broken_locale_in_order_names_the_error() {
+        let mut files = locale_files("%{locale}:\n  a: A\n");
+        for (path, body) in &mut files {
+            if path.ends_with("de.yml") || path.ends_with("it.yml") {
+                *body = "- not a mapping\n".to_string();
+            }
+        }
+        let (root, cfg) = project("errorder", &files);
+        for _ in 0..20 {
+            let err = Store::load(&cfg).unwrap_err();
+            assert!(err.contains("de.yml"), "{err}");
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     fn leaf(key: &str) -> Leaf {
         Leaf {
