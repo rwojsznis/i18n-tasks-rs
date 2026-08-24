@@ -58,6 +58,13 @@ fn install_pool(jobs: Option<usize>) -> Result<(), String> {
         })
 }
 
+/// The flags every project-reading command shares.
+///
+/// ref: lib/i18n/tasks/cli.rb. These are flattened into each subcommand, not
+/// declared on `Cli`, because the gem's flags belong to the task:
+/// `i18n-tasks missing -c config/i18n-tasks.yml`. So they are per-subcommand
+/// and `i18n-tasks-rs -c … missing` is an error, which `tests/cli_args.rs`
+/// pins down.
 #[derive(clap::Args, Clone, Debug)]
 struct Common {
     /// Locale(s) to process. Special: base. Default: all.
@@ -69,13 +76,13 @@ struct Common {
     /// Trailing locales, equivalent to `--locales`.
     #[arg(value_name = "LOCALES", value_delimiter = ',')]
     positional_locales: Vec<String>,
-    #[arg(long, short = 'c', global = true, default_value = DEFAULT_CONFIG_PATH)]
+    #[arg(long, short = 'c', default_value = DEFAULT_CONFIG_PATH)]
     config: PathBuf,
-    #[arg(long, short = 'f', global = true, value_parser = ["text", "json"], default_value = "text")]
+    #[arg(long, short = 'f', value_parser = ["text", "json"], default_value = "text")]
     format: String,
     /// Directory every config path is relative to. Defaults to the working
     /// directory, which is what the gem uses.
-    #[arg(long, global = true)]
+    #[arg(long)]
     root: Option<PathBuf>,
     /// Worker threads for the source scan. Defaults to the core count.
     ///
