@@ -1,0 +1,204 @@
+<% require File.expand_path("lib/i18n_tasks/slim_multiline_scanner", Dir.pwd) %>
+
+base_locale: de
+locales: [de, en, fr]
+
+data:
+  read:
+    - config/locales/base.%{locale}.yml
+    - config/locales/*.%{locale}.yml
+  write:
+    - [
+        "{activemodel, activerecord, controllers, date, datetime, devise, mailers, models, number, time, views, will_paginate, signup, jobs, ratings, gallery, about, careers, uploads}.*",
+        'config/locales/\1.%{locale}.yml',
+      ]
+    - config/locales/base.%{locale}.yml
+
+  # External locale data (e.g. gems).
+  # This data is not considered unused and is never written to.
+  external:
+  ## Example (replace %#= with %=):
+  # - "<%#= %x[bundle show vagrant].chomp %>/templates/locales/%{locale}.yml"
+
+  ## Specify the router (see Readme for details). Valid values: conservative_router, pattern_router, or a custom class.
+  # router: conservative_router
+
+  yaml:
+    write:
+      # do not wrap lines at 80 characters
+      line_width: -1
+
+  ## Pretty-print JSON:
+  # json:
+  #   write:
+  #     indent: '  '
+  #     space: ' '
+  #     object_nl: "\n"
+  #     array_nl: "\n"
+
+# Find translate calls
+search:
+  prism: "rails"
+
+  scanners:
+    - ["::I18n::Tasks::Scanners::RubyScanner", { only: ["*.rb"] }]
+    - ["::I18n::Tasks::Scanners::ErbAstScanner", { only: ["*.erb"] }]
+    - ["::I18n::Tasks::Scanners::PatternWithScopeScanner", { exclude: ["*.erb", "*.rb"] }]
+    - ["I18nTasks::SlimMultilineScanner", { only: ["*.html.slim"] }]
+
+  paths:
+    - app/
+
+  ## Root directories for relative keys resolution.
+  relative_roots:
+    - app/controllers
+    - app/forms
+    - app/helpers
+    - app/mailers
+    - app/presenters
+    - app/views
+
+  ## Files or `File.fnmatch` patterns to exclude from search. Some files are always excluded regardless of this setting:
+  ##   %w(*.jpg *.png *.gif *.svg *.ico *.eot *.otf *.ttf *.woff *.woff2 *.pdf *.css *.sass *.scss *.less *.yml *.json)
+  exclude:
+    - app/webpack
+
+  ## Alternatively, the only files or `File.fnmatch patterns` to search in `paths`:
+  ## If specified, this settings takes priority over `exclude`, but `exclude` still applies.
+  # only: ["*.rb", "*.html.slim"]
+
+  ## If `strict` is `false`, guess usages such as t("categories.#{category}.title"). The default is `true`.
+  # strict: true
+
+  ## Multiple scanners can be used. Their results are merged.
+  ## The options specified above are passed down to each scanner. Per-scanner options can be specified as well.
+  ## See this example of a custom scanner: https://github.com/glebm/i18n-tasks/wiki/A-custom-scanner-example
+
+## Translation Services
+translation:
+  backend: openai
+  openai_model: gpt-5.4-mini
+  openai_system_prompt: |
+    You are a professional translator. Translate each string of the array from
+    the %{from} locale to the %{to} locale and return an array of the same shape.
+
+    HTML markup (enclosed in < and >) must not be changed under any circumstance.
+    Variables (starting with %%{ and ending with }) must not be changed either.
+
+## Do not consider these keys missing:
+ignore_missing:
+  - "breadcrumbs.admin.v2.*"
+  - "legal_notices.*"
+  - "admin.v2.pending_jobs.index.*"
+  - "mailers.zero_proposal_jobs_notification.*"
+  - "activerecord.models.publishable_presenter"
+# - 'errors.messages.{accepted,blank,invalid,too_short,too_long}'
+# - '{devise,simple_form}.*'
+
+# NOTE: prism right now doesn't detect a lot of dynamic interpolations in the app;
+# ideally we should just minimize those as some are indeed quite confusing
+ignore_unused:
+  - "{activerecord, activemodel, number, date, datetime, time, will_paginate, views.pagination, support}.*"
+  - "{refresh_quote, quote_now}"
+  - "breadcrumbs.admin.v2.*"
+  - "sort_ascending_by_*"
+  - "sort_descending_by*"
+  - "category_questions_*"
+  - "feed.*"
+  - "jobs.missing_approval.*_html"
+  - "admin.v2.shared.search.form.*"
+  - "qrbills.*"
+  - "credit_refunds.*"
+  - "occupations.main_job_titles.*"
+  # Rendered from contact request status filters.
+  - "contact_requests.index.headline.*"
+  # Directory landing pages choose copy/button variants dynamically.
+  - "directories.index_by_occupation.paragraph.*"
+  - "directories.shared_between_indexes.submit_button_text.*"
+  # Disable-account reasons are mapped from service/admin rejection reason enums.
+  - "services.disable_account.*"
+  # Badges use dynamic badge title and loyalty badge type lookups.
+  - "badges.{alt,tooltip}.*"
+  # Category names are resolved through Category#localized_name from category codes.
+  - "categories.name.*"
+  # Company document sections/statuses and verification types are enum-backed.
+  - "company_documents.section_titles.*"
+  - "company_documents.status.*"
+  - "verifications.types.*"
+  # Controller flash keys are resolved by Rails controller/action conventions.
+  - "controllers.application.*"
+  # Used via I18n.t!("categories.details.#{category.code}.footer_text_html") in Job::Index.
+  - "categories.details.*.footer_text_html"
+  # Cost estimator shared components translate question labels through category_code/scope interpolation.
+  - "cost_estimations_v3.categories.*.questions.*"
+  - "cost_estimations_v3.categories.*.options.*.*"
+  - "cost_estimations_v3.categories.*.tooltips.*.*"
+  # Used by frontend wizard props and Job#i18n_site_visit_possible_description.
+  - "jobs.site_visit_possible.*.description"
+  # Homepage URL list sections are rendered from Homepage config.
+  - "homepage.url_list.*"
+  # Job completion periods are translated from Job completion_period enum/config values.
+  - "jobs.completion_date.*"
+  # Locale-backed location aliases used by dynamic location lookup.
+  - "locations.*"
+  # Occupation copy/plurals are resolved from Occupation#code.
+  - "occupations.{content,plural}.*"
+  # Quote units are translated from Quote::UNIT values.
+  - "quote.unit.*"
+  # Company profile image labels are resolved by image kind.
+  - "views.company_profiles.images.*"
+  - "devise.*"
+  - "category_services.*" # dynamically used by CategoryService
+  - "category_services_*" # dynamically used by Serializer::Job::Wizard::ServiceQuestions
+  - "job_wizard_project.*" # TODO: wizard PoC
+
+## Exclude these keys from the `i18n-tasks eq-base' report:
+ignore_eq_base:
+  all:
+    - "No" # need to rename this, gets converted by true/false
+    - "Yes" # same as above
+    - "*.no"
+    - "*.yes"
+    - "about.team.*.name"
+    - "Blog"
+    - "breadcrumbs.admin.*"
+    - "CHF"
+    - "data_protection_policy.*link*_html"
+    - "date.formats.*"
+    - "home_url"
+    - "km"
+    - "landing_pages.*.number"
+    - "maximum"
+    - "number.format.*"
+    - "number.human.decimal_units.format"
+    - "number.human.storage_units.units.*"
+    - "PDF"
+    - "show.page_title"
+    - "time.formats.*"
+    - "views.pagination.truncate"
+    - "will_paginate.page_gap"
+    # job questions - interpolated-only fields / numeric only answer - nothing that can be translated
+    - "category_questions_*.explanation_display"
+    - "category_questions_floors.total_area.answer"
+    - "category_questions_painting.total_area.options.m2"
+    - 'category_questions_renovation.{functional_room_number,kitchen_bathroom_number,living_bedroom_number}.options.{\d}'
+    - "homepage.locale_switcher.options.de"
+    - "homepage.locale_switcher.options.fr"
+
+## Ignore these keys completely:
+ignore:
+  - "{simple_form}.*" # used in new admin only
+  - "errors.messages.*" # from devise
+
+## Sometimes, it isn't possible for i18n-tasks to match the key correctly,
+## e.g. in case of a relative key defined in a helper method.
+## In these cases you can use the built-in PatternMapper to map patterns to keys, e.g.:
+#
+# <%# I18n::Tasks.add_scanner 'I18n::Tasks::Scanners::PatternMapper',
+#       only: %w(*.html.haml *.html.slim),
+#       patterns: [['= title\b', '.page_title']] %>
+#
+# The PatternMapper can also match key literals via a special %{key} interpolation, e.g.:
+#
+# <%# I18n::Tasks.add_scanner 'I18n::Tasks::Scanners::PatternMapper',
+#       patterns: [['\bSpree\.t[( ]\s*%{key}', 'spree.%{key}']] %>
