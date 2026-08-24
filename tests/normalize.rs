@@ -418,3 +418,66 @@ fn a_destination_directory_that_cannot_be_created_is_an_error() {
     assert_eq!(code, 2, "{text}");
     assert!(text.contains("cannot create"), "{text}");
 }
+
+/// H3. `apply` must write the path that `plan` chose, not a re-parse of the
+/// string the report prints. A destination component holding a `\` is legal on
+/// Unix, and `display_path` turns that byte into a separator.
+#[test]
+fn a_destination_holding_a_backslash_is_written_where_it_was_planned() {
+    let p = Project::new(
+        "backslash",
+        "base_locale: en\nlocales: [en]\ndata:\n  read:\n    - config/locales/%{locale}.yml\n  write:\n    - \"config/back\\\\slash/%{locale}.yml\"\nsearch:\n  paths: [app/]\n",
+    );
+    p.write("config/locales/en.yml", "---\nen:\n  a: A\n");
+    let (code, text) = p.run(&["normalize", "--pattern-router", "--write", "--allow-delete"]);
+    assert_eq!(code, 0, "{text}");
+    assert!(
+        p.exists("config/back\\slash/en.yml"),
+        "the planned path was not written: {text}"
+    );
+    assert!(
+        !p.exists("config/back/slash/en.yml"),
+        "the `\\` was read back as a separator: {text}"
+    );
+}
+
+/// H3, second half. A `data.write` path that leaves the root, and one that is
+/// absolute, both have to survive the trip from `plan` to `apply`.
+#[test]
+fn a_destination_outside_the_root_is_written_where_it_was_planned() {
+    let p = Project::new("escape-root", SIMPLE);
+    let root = p.root.join("proj");
+    let abs = p.root.join("absolute").join("%{locale}.yml");
+    std::fs::create_dir_all(root.join("config/locales")).unwrap();
+    let cfg_path = root.join("config/i18n-tasks.yml");
+    std::fs::write(
+        &cfg_path,
+        format!(
+            "base_locale: en\nlocales: [en]\ndata:\n  read:\n    - config/locales/%{{locale}}.yml\n  write:\n    - ['out.*', '../outside/%{{locale}}.yml']\n    - ['abs.*', '{}']\n    - config/locales/%{{locale}}.yml\nsearch:\n  paths: [app/]\n",
+            abs.display()
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("config/locales/en.yml"),
+        "---\nen:\n  out:\n    a: A\n  abs:\n    b: B\n  keep:\n    c: C\n",
+    )
+    .unwrap();
+
+    let cfg = Config::load(&cfg_path, Some(&root)).expect("config");
+    let store = Store::load(&cfg).expect("store");
+    let report = normalize::plan(&cfg, &store, &store.locales, true).unwrap();
+    normalize::apply(&report).unwrap();
+
+    assert_eq!(
+        std::fs::read_to_string(p.root.join("outside/en.yml")).unwrap_or_default(),
+        "---\nen:\n  out:\n    a: A\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(p.root.join("absolute/en.yml")).unwrap_or_default(),
+        "---\nen:\n  abs:\n    b: B\n"
+    );
+    // Nothing landed under the root pretending to be either of them.
+    assert!(!root.join("outside/en.yml").exists());
+    assert!(!root.join("absolute").exists());
+}

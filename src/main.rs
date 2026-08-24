@@ -609,7 +609,7 @@ fn normalize_command(
     if !deletions.is_empty() {
         eprintln!("{} file(s) end up with no keys:", deletions.len());
         for d in &deletions {
-            eprintln!("  {}", d.path);
+            eprintln!("  {}", d.display);
         }
     }
     if s.json {
@@ -639,7 +639,7 @@ fn normalize_command(
             "refusing to delete the files listed above. Pass `--allow-delete` to allow it.".into(),
         );
     }
-    normalize::apply(&s.cfg, &report)?;
+    normalize::apply(&report)?;
     Ok(EXIT_OK)
 }
 
