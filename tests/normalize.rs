@@ -307,7 +307,8 @@ fn a_new_key_from_another_locale_lands_in_the_matching_file() {
     p.write("config/locales/models.de.yml", "de:\n  user: Benutzer\n");
     let cfg = p.config();
     let store = p.store();
-    let router = i18n_tasks_rs::data::route::ConservativeRouter::new(&cfg, &store);
+    let fallback = i18n_tasks_rs::data::route::PatternRouter::new(&cfg);
+    let router = i18n_tasks_rs::data::route::ConservativeRouter::new(&fallback, &store);
     // `user` is in both locales, so `de` keeps its own file.
     assert_eq!(
         router.route_key("de", "user").unwrap(),
