@@ -30,6 +30,8 @@ pub fn required_categories(locale: &str) -> Option<&'static [&'static str]> {
     const ONE_OTHER: &[&str] = &["one", "other"];
     const OTHER: &[&str] = &["other"];
     const ONE_FEW_OTHER: &[&str] = &["one", "few", "other"];
+    // Not currently used by any rails-i18n locale, kept so the shape is honest.
+    #[allow(dead_code)]
     const ONE_TWO_OTHER: &[&str] = &["one", "two", "other"];
     const ONE_TWO_FEW_OTHER: &[&str] = &["one", "two", "few", "other"];
     const ONE_FEW_MANY_OTHER: &[&str] = &["one", "few", "many", "other"];
@@ -66,9 +68,6 @@ pub fn required_categories(locale: &str) -> Option<&'static [&'static str]> {
         (&["gd", "hsb", "sl"], ONE_TWO_FEW_OTHER),
         (&["ar"], ALL_SIX),
     ];
-    // Not currently used by any rails-i18n locale, kept so the shape is honest.
-    let _ = ONE_TWO_OTHER;
-
     let candidates = [locale.to_string(), alternate_locale(locale)];
     for candidate in candidates.iter().filter(|c| !c.is_empty()) {
         for (locales, keys) in table {
