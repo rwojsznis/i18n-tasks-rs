@@ -482,3 +482,37 @@ fn a_destination_outside_the_root_is_written_where_it_was_planned() {
     assert!(!root.join("outside/en.yml").exists());
     assert!(!root.join("absolute").exists());
 }
+
+/// Every plain form YAML 1.1 reads as a number keeps the bytes it was written
+/// with, so the Ruby type the app sees does not change.
+/// ref: docs/accepted-diffs.md §29.
+#[test]
+fn every_number_form_round_trips_unquoted() {
+    let p = Project::new("numbers", SIMPLE);
+    let input = "---\nen:\n  date: 2026-08-24\n  float: 1.5\n  hexy: 0x1f\n  inf: .inf\n  \
+                 int: 42\n  octal: 017\n  sexa: 1:30\n";
+    p.write("config/locales/en.yml", input);
+    let (code, text) = p.run(&["normalize", "--write"]);
+    assert_eq!(code, 0, "{text}");
+    assert_eq!(p.read("config/locales/en.yml"), input);
+    assert_eq!(p.run(&["check-normalized"]).0, 0);
+}
+
+/// Psych resolves `yes`, `no`, `on` and `off` to booleans, in any casing. The
+/// loader has to agree, or the emitter quotes them and the app reads a String
+/// where it read `true`.
+#[test]
+fn a_yaml_boolean_stays_a_boolean() {
+    let p = Project::new("booleans", SIMPLE);
+    p.write(
+        "config/locales/en.yml",
+        "en:\n  a: yes\n  b: Off\n  c: nO\n  d: TRUE\n",
+    );
+    let (code, text) = p.run(&["normalize", "--write"]);
+    assert_eq!(code, 0, "{text}");
+    assert_eq!(
+        p.read("config/locales/en.yml"),
+        "---\nen:\n  a: true\n  b: false\n  c: false\n  d: true\n"
+    );
+    assert_eq!(p.run(&["check-normalized"]).0, 0);
+}
