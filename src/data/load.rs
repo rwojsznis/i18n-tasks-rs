@@ -342,6 +342,16 @@ fn locale_pattern_re(pattern: &str) -> Option<Regex> {
     Regex::new(&out).ok()
 }
 
+/// The locale a concrete path names under a `data.read` pattern, or `None`
+/// when the pattern does not read that path at all.
+///
+/// Exposed so `init-config` can check the patterns it generates with the rule
+/// the loader will apply to them, rather than with a second implementation of
+/// it. `path` is project-relative and slash-separated.
+pub fn locale_for_path(pattern: &str, path: &str) -> Option<String> {
+    extract_locale(&locale_pattern_re(pattern)?, path)
+}
+
 /// Reads the locale back out of a concrete path.
 fn extract_locale(re: &Regex, path: &str) -> Option<String> {
     Some(re.captures(path)?.get(1)?.as_str().to_string())

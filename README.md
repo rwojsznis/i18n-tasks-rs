@@ -32,15 +32,16 @@ i18n-tasks-rs normalize [-l LOCALES] [locale ...] [-p/--pattern-router]
                                      [--write | --dry-run] [--allow-delete]
 i18n-tasks-rs health    [-l LOCALES] [locale ...]
 i18n-tasks-rs find      [-l LOCALES] [locale ...]
+i18n-tasks-rs init-config    [-o/--to PATH] [--write] [--force]
 i18n-tasks-rs migrate-config [-i/--from PATH] [-o/--to PATH]
                              [--write] [--force]
 ```
 
-Every command that reads a project — that is, all of them except
-`migrate-config` — takes `-c/--config PATH` (default
+Every command that reads a project — that is, all of them except the two
+config commands — takes `-c/--config PATH` (default
 `config/i18n-tasks-rs.yml`), `--root PATH` (default the working directory),
-`-f/--format text|json` and `-j/--jobs N`. `migrate-config` takes `--root`
-alone, because it scans nothing.
+`-f/--format text|json` and `-j/--jobs N`. `init-config` and `migrate-config`
+take `--root` alone, because neither scans the source.
 
 Exit codes match the gem: **0** the check passed, **1** the check found
 something, **2** the tool itself failed.
@@ -96,8 +97,56 @@ Ruby, no scanner class names. See blocker B3 in
 [`docs/design-notes.md`](docs/design-notes.md), and
 `tests/fixtures/sample_app/i18n-tasks-rs.yml` for a realistic one.
 
-A gem config therefore cannot be renamed into place. `migrate-config` converts
-one:
+### Starting from nothing
+
+`init-config` generates one from the project. The gem's answer here is to copy
+a template — `cp $(bundle exec i18n-tasks gem-path)/templates/config/...` —
+which is the same file for every project and so is right about nothing but the
+defaults. This one is read off the project:
+
+```bash
+i18n-tasks-rs init-config              # print the result, write nothing
+i18n-tasks-rs init-config --write      # create config/i18n-tasks-rs.yml
+```
+
+- **`data.read`** comes from the locale files that are there, one pattern per
+  layout found: `config/locales/en.yml` gives `%{locale}.yml`,
+  `devise.en.yml` gives `*.%{locale}.yml`, a directory per locale gives both
+  `%{locale}/*.yml` and `%{locale}/**/*.yml` — two, because the loader's `**`
+  sits between two slashes and never matches nothing. Every file found must be
+  matched by a pattern that was emitted, judged with the loader's own rule and
+  not a second implementation of it. A file that names no locale is listed in
+  the header and the command exits **1**.
+- **`data.write`** is the first candidate target those patterns read back, so
+  `normalize --write` cannot move keys somewhere nothing looks for them. In a
+  namespaced layout that is `config/locales/common.%{locale}.yml`, not
+  `config/locales/%{locale}.yml`, which nothing there reads.
+- **`base_locale`** comes from `config.i18n.default_locale` in the project's
+  Ruby, read as text — blocker B3 holds here too, so a computed value is not
+  detected and the fallback says so.
+- **`search.paths`** and **`search.exclude`** are the candidates that exist:
+  `app/`, `lib/`, minus build directories such as `app/assets/builds` and
+  `lib/assets`. The gem searches `app/` alone; `lib/` is added because a key
+  used only from a rake task there would otherwise be reported unused, and
+  acting on that deletes a live translation.
+- **`search.relative_roots`** keeps the gem defaults the project has, and adds
+  a directory only when a file under it uses a relative key — which is the only
+  condition under which a relative root does anything. `app/components` earns
+  its place; `app/helpers` does not if the project has no such directory.
+- `locales`, the routers and every `ignore` list are written out commented, so
+  the file still documents the supported surface.
+
+The generated config is then read back with the normal parser and the data
+loaded with it, before anything is offered for writing. The header and the
+terminal report both say what it read: `645 key(s) in 4 locale(s) from 9
+file(s)`. `--write` never replaces an existing file without `--force`.
+
+`init-config` says so, and exits **1**, when the project still has a gem config:
+`migrate-config` is the better command there, because it keeps the ignore lists.
+
+### Starting from a gem config
+
+A gem config cannot be renamed into place. `migrate-config` converts one:
 
 ```bash
 i18n-tasks-rs migrate-config              # print the result, write nothing
@@ -154,6 +203,7 @@ An unknown key is an error, with the supported list in the message.
 | Path | What |
 |---|---|
 | `src/config.rs` | the plain-YAML config, plus a stable config digest |
+| `src/init.rs` | `init-config`: a config read off the project's layout |
 | `src/migrate.rs` | `migrate-config`: a gem config to the above |
 | `src/pattern.rs` | the key pattern DSL, as a segment matcher (B2) |
 | `src/keys.rs` | key splitting and `ActiveSupport#underscore` |

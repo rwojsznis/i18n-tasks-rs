@@ -7,11 +7,11 @@
 use clap::{Parser, Subcommand};
 use i18n_tasks_rs::config::{Config, DEFAULT_CONFIG_PATH};
 use i18n_tasks_rs::data::load::Store;
-use i18n_tasks_rs::migrate;
 use i18n_tasks_rs::report::missing::MissingType;
 use i18n_tasks_rs::report::{Outcome, interpolations, missing, normalize, unused};
 use i18n_tasks_rs::stats::{ForestStats, forest_stats};
 use i18n_tasks_rs::used::UsedKeys;
+use i18n_tasks_rs::{init, migrate};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -209,6 +209,25 @@ enum Command {
         #[command(flatten)]
         common: Common,
     },
+    /// Generate a config from the project's own layout.
+    ///
+    /// Detects the locale files, the base locale, the search paths and the
+    /// relative roots, then reads the result back before offering to write it.
+    /// Exits 1 when the generated config still needs a human.
+    InitConfig {
+        /// Where to write. Default: config/i18n-tasks-rs.yml.
+        #[arg(long, short = 'o')]
+        to: Option<PathBuf>,
+        /// Write the file. Without this the config goes to stdout.
+        #[arg(long)]
+        write: bool,
+        /// Overwrite the destination when it already exists.
+        #[arg(long)]
+        force: bool,
+        /// The project directory to inspect. Default: the working directory.
+        #[arg(long)]
+        root: Option<PathBuf>,
+    },
     /// Convert a gem config (YAML or ERB) into the config this tool reads.
     ///
     /// Unsupported settings are dropped, each with the reason recorded in the
@@ -336,6 +355,12 @@ fn run() -> Result<u8, String> {
             let used = s.scan()?;
             find_output(&s, &used)
         }
+        Command::InitConfig {
+            to,
+            write,
+            force,
+            root,
+        } => init_config(to.as_deref(), *write, *force, root.as_deref()),
         Command::MigrateConfig {
             from,
             to,
@@ -350,6 +375,51 @@ fn run() -> Result<u8, String> {
             root.as_deref(),
         ),
     }
+}
+
+/// The gem's answer here is `cp $(bundle exec i18n-tasks gem-path)/templates/...`,
+/// which is the same file for every project. This one is generated from the
+/// project. Writing is opt-in all the same (blocker B8).
+fn init_config(
+    to: Option<&Path>,
+    write: bool,
+    force: bool,
+    root: Option<&Path>,
+) -> Result<u8, String> {
+    let root = root.unwrap_or(Path::new("."));
+    let to = match to {
+        Some(p) => p.to_path_buf(),
+        None => root.join(init::INIT_TARGET),
+    };
+    let generated = init::generate(root, &to)?;
+
+    if write {
+        write_config(&to, &generated.output, force)?;
+    } else {
+        print!("{}", generated.output);
+    }
+    eprint!("{}", init::to_text(&generated, &to, write));
+    Ok(if generated.needs_attention() {
+        EXIT_FOUND
+    } else {
+        EXIT_OK
+    })
+}
+
+/// Shared by the two commands that produce a config. Neither replaces a file
+/// someone may have edited without being told to.
+fn write_config(to: &Path, contents: &str, force: bool) -> Result<(), String> {
+    if to.exists() && !force {
+        return Err(format!(
+            "{} already exists. Pass `--force` to overwrite it.",
+            to.display()
+        ));
+    }
+    if let Some(dir) = to.parent().filter(|d| !d.as_os_str().is_empty()) {
+        std::fs::create_dir_all(dir)
+            .map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
+    }
+    std::fs::write(to, contents).map_err(|e| format!("cannot write {}: {e}", to.display()))
 }
 
 /// ref: blocker B3. The gem config is ERB over Ruby, so it is translated, not
@@ -384,18 +454,7 @@ fn migrate_config(
     let migration = migrate::migrate(&src, &from, &to)?;
 
     if write {
-        if to.exists() && !force {
-            return Err(format!(
-                "{} already exists. Pass `--force` to overwrite it.",
-                to.display()
-            ));
-        }
-        if let Some(dir) = to.parent().filter(|d| !d.as_os_str().is_empty()) {
-            std::fs::create_dir_all(dir)
-                .map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
-        }
-        std::fs::write(&to, &migration.output)
-            .map_err(|e| format!("cannot write {}: {e}", to.display()))?;
+        write_config(&to, &migration.output, force)?;
     } else {
         print!("{}", migration.output);
     }

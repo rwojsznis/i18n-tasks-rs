@@ -467,3 +467,54 @@ the first write.
 - A key segment holding a dot — `numeric.2.5` — cannot be told apart from a
   nesting level in the dotted form, so the emitter split it into two levels.
   `Leaf::odd_segments` records the real segments for the rare key that needs it.
+
+## 25. `init-config` — a command the gem has no equivalent for
+
+The gem starts a project with a copy:
+
+```
+cp $(bundle exec i18n-tasks gem-path)/templates/config/i18n-tasks.yml config/
+```
+
+That template is the same file for every project, so the settings that matter
+most — where the locale data is, and what the base locale is — start wrong and
+stay wrong until somebody notices. The failure is quiet: a `data.read` that
+matches nothing produces a clean `missing` report and an `unused` report with
+nothing in it.
+
+`init-config` reads the project instead, and the one property it enforces is
+coverage: every locale file found under the locale directory must be matched by
+a `data.read` pattern the command emitted, judged with `locale_for_path` — the
+loader's own rule — rather than with a second implementation of it. A file that
+no pattern reads is named in the header and the command exits 1. `data.write`
+is chosen the same way: the first candidate target the emitted patterns read
+back, so `normalize --write` cannot move keys somewhere nothing looks for them.
+
+The generated config is parsed and the data loaded before the command offers to
+write anything, so it can report `645 key(s) in 4 locale(s) from 9 file(s)`
+instead of asserting that the settings are right.
+
+Detection is all reading, never evaluation (blocker B3): `base_locale` comes
+from the text of `config.i18n.default_locale` in `config/application.rb` and the
+per-environment and initializer files, and a value built from anything but a
+literal is not detected — the header then says the locale was assumed.
+
+`search.paths` is the one place the command is looser than the gem, whose
+`SEARCH_DEFAULTS` is `app/` alone: `lib/` is added when it exists. The two
+errors are not symmetric. A key used only from a rake task or a service object
+under `lib/` is invisible to a scan of `app/`, so `unused` reports it and acting
+on that report deletes a live translation. The other direction — a vendored,
+minified blob under `lib/` inventing a used key — lands in `missing`, where a
+human reads it and adds an `ignore_missing` entry. `lib/assets` and the build
+directories under `app/` are excluded up front for that reason.
+
+`search.relative_roots` is the one place the command is stricter than the gem's
+defaults: a gem default is kept only when the directory exists, and any other
+directory is added only when a file under it uses a relative key. Blocker B6 and
+accepted difference 3 make relative roots load-bearing here, and a wrong list is
+worse than a short one.
+
+Writing stays opt-in (blocker B8, difference 23): without `--write` the config
+goes to stdout, and `--write` never replaces an existing file without `--force`.
+When the project still has a gem config the command says so and exits 1, because
+`migrate-config` keeps the ignore lists and this command has none of them.

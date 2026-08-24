@@ -26,7 +26,10 @@ pub const ALWAYS_EXCLUDE: &[&str] = &[
 ];
 
 /// ref: lib/i18n/tasks/used_keys.rb#SEARCH_DEFAULTS
-const DEFAULT_RELATIVE_ROOTS: &[&str] = &[
+///
+/// Public because `init-config` filters this list down to the directories a
+/// project actually has.
+pub const DEFAULT_RELATIVE_ROOTS: &[&str] = &[
     "app/controllers",
     "app/helpers",
     "app/mailers",
@@ -154,12 +157,16 @@ impl Config {
         let src = std::fs::read_to_string(path).map_err(|e| {
             let mut msg = format!("cannot read config {}: {e}", path.display());
             // The most likely reason is that nobody has migrated the gem
-            // config yet, and that is a one-command fix.
-            if let Some(gem) = crate::migrate::find_gem_config(root.unwrap_or(Path::new("."))) {
-                msg.push_str(&format!(
+            // config yet, and that is a one-command fix. Failing that, the
+            // project never had one, and that is also a one-command fix.
+            match crate::migrate::find_gem_config(root.unwrap_or(Path::new("."))) {
+                Some(gem) => msg.push_str(&format!(
                     "\n  found {}: run `i18n-tasks-rs migrate-config` to convert it.",
                     gem.display()
-                ));
+                )),
+                None => msg.push_str(
+                    "\n  run `i18n-tasks-rs init-config` to generate one from this project.",
+                ),
             }
             msg
         })?;

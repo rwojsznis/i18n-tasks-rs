@@ -1,0 +1,7 @@
+fr:
+  users:
+    index:
+      title: Utilisateurs
+      notice: Enregistre
+  shared:
+    ok: OK
