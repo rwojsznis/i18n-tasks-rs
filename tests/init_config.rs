@@ -198,6 +198,31 @@ fn the_command_writes_only_when_asked() {
     assert_eq!(code, 0, "{out}");
 }
 
+/// `-o` names the destination, `--root` names the project it is generated from.
+/// The two are independent paths, and both are optional, so this pins which one
+/// is which: the destination is used verbatim, and the default target under the
+/// root stays untouched.
+#[test]
+fn the_destination_is_independent_of_the_project_root() {
+    let s = Sandbox::new("dest");
+    let dest = s.root.join("elsewhere/custom.yml");
+    let (code, out) = s.run(&["--write", "-o", dest.to_str().unwrap()]);
+    assert_eq!(code, 0, "{out}");
+    // The project under `--root` is what was read: it holds `en.yml` only.
+    assert!(
+        std::fs::read_to_string(&dest)
+            .unwrap()
+            .contains("base_locale: en"),
+        "{out}"
+    );
+    assert!(!s.target().exists(), "the default target was written too");
+
+    // `--force` is about the destination, not the default target.
+    let (code, out) = s.run(&["--write", "-o", dest.to_str().unwrap()]);
+    assert_eq!(code, 2, "{out}");
+    assert!(out.contains("--force"), "{out}");
+}
+
 /// The generated config is the one the tool then reads, so the whole point is
 /// that the commands work straight afterwards.
 #[test]
