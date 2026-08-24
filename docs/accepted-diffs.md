@@ -265,6 +265,22 @@ terminal-table and Rainbow are replaced with a plain aligned table. `--format
 json` is new; the gem has no JSON output. Every JSON envelope carries the config
 digest, so a differential run can prove both tools read the same settings.
 
+The JSON is an interface, not a rendering of the table, so a reported row gives
+its reason as a tagged object rather than as the sentence the table prints:
+
+```json
+{ "locale": "en", "key": "c.d", "reason": { "type": "used",
+                                            "path": "app/legacy/y.rb", "line": 1 } }
+{ "locale": "de", "key": "extra", "value": "k",
+  "reason": { "type": "diff", "present_in": "en" } }
+```
+
+The five `type` values are `used`, `diff` and `plural` for `missing`,
+`interpolations` for `check-consistent-interpolations` and `reserved` for
+`check-reserved-interpolations`. `unused` rows carry no reason at all, and the
+field is then absent. The text output is unchanged: the same sentences are
+rendered from the object.
+
 ## 14. One Prism parse per ERB file — performance, same keys
 
 **Gem.** `erb_ast_scanner.rb:107` parses every code tag on its own, so a view
