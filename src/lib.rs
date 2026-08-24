@@ -11,4 +11,5 @@ pub mod report;
 pub mod scan;
 pub mod stats;
 pub mod used;
+pub mod walk;
 pub mod yaml;
