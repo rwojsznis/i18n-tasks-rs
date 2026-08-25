@@ -5,22 +5,28 @@
 use super::{KeyRow, Outcome, render_table};
 use crate::config::{Config, IgnoreType};
 use crate::data::load::Store;
+use crate::pattern::Pattern;
 use crate::plural::depluralize_key;
 use crate::scan::Occurrence;
 use crate::used::UsedKeys;
 use serde::Serialize;
+use std::collections::BTreeSet;
 
 #[derive(Debug, Serialize)]
 pub struct UnusedReport {
     pub rows: Vec<KeyRow>,
     /// Blocker B5: calls whose key cannot be verified at all.
     pub opaque: Vec<Occurrence>,
+    /// Exact leaves before plural nodes are collapsed for display.
+    #[serde(skip)]
+    removable: BTreeSet<(String, String)>,
 }
 
 pub fn report(cfg: &Config, store: &Store, used: &UsedKeys, locales: &[String]) -> UnusedReport {
     let base = store.tree(&store.base_locale);
     let ignore = cfg.ignore_patterns(IgnoreType::Unused, None);
     let mut rows = Vec::new();
+    let mut removable = BTreeSet::new();
     for locale in locales {
         let Some(tree) = store.tree(locale) else {
             continue;
@@ -46,6 +52,7 @@ pub fn report(cfg: &Config, store: &Store, used: &UsedKeys, locales: &[String]) 
                 continue;
             }
             hits.push(key);
+            removable.insert((locale.clone(), key.to_string()));
         }
         for key in collapse_plural_nodes(tree, hits) {
             let value = tree.get(&key).map(|l| l.value.to_display_string());
@@ -60,6 +67,7 @@ pub fn report(cfg: &Config, store: &Store, used: &UsedKeys, locales: &[String]) 
     UnusedReport {
         rows,
         opaque: used.opaque.clone(),
+        removable,
     }
 }
 
@@ -95,6 +103,39 @@ fn collapse_plural_nodes(tree: &crate::data::load::LocaleTree, hits: Vec<&str>) 
 }
 
 impl UnusedReport {
+    #[cfg(test)]
+    pub(crate) fn empty() -> UnusedReport {
+        UnusedReport {
+            rows: Vec::new(),
+            opaque: Vec::new(),
+            removable: BTreeSet::new(),
+        }
+    }
+
+    /// Applies `remove-unused --pattern` after plural rows are collapsed, as
+    /// the gem does with `unused_keys.select_keys`.
+    pub fn select_pattern(&mut self, pattern: &Pattern) {
+        self.rows.retain(|row| pattern.is_match(&row.key));
+        self.removable.retain(|(locale, key)| {
+            self.rows.iter().any(|row| {
+                row.locale == *locale
+                    && (row.key == *key
+                        || key
+                            .strip_prefix(&row.key)
+                            .is_some_and(|rest| rest.starts_with('.')))
+            })
+        });
+    }
+
+    pub fn has_removable(&self) -> bool {
+        !self.removable.is_empty()
+    }
+
+    pub fn removable(&self, locale: &str, key: &str) -> bool {
+        self.removable
+            .contains(&(locale.to_string(), key.to_string()))
+    }
+
     pub fn outcome(&self) -> Outcome {
         Outcome::of(!self.rows.is_empty())
     }

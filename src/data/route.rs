@@ -193,6 +193,21 @@ pub fn route(
     locale: &str,
     force_pattern: bool,
 ) -> Result<Vec<Destination>, String> {
+    route_filtered(cfg, store, locale, force_pattern, &|_| true)
+}
+
+/// Groups the selected keys of one locale by destination file.
+///
+/// # Errors
+///
+/// The locale has no data, or a selected key cannot be routed.
+pub fn route_filtered(
+    cfg: &Config,
+    store: &Store,
+    locale: &str,
+    force_pattern: bool,
+    keep: &impl Fn(&str) -> bool,
+) -> Result<Vec<Destination>, String> {
     let pattern = PatternRouter::new(cfg);
     let conservative = if force_pattern || cfg.data.router == Router::Pattern {
         None
@@ -205,6 +220,9 @@ pub fn route(
 
     let mut groups: HashMap<PathBuf, Vec<String>> = HashMap::new();
     for leaf in &tree.leaves {
+        if !keep(&leaf.key) {
+            continue;
+        }
         let path = match &conservative {
             Some(r) => r.route_key(locale, &leaf.key)?,
             None => pattern.route_key(locale, &leaf.key)?,

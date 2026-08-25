@@ -115,8 +115,22 @@ impl NormalizeReport {
     ///
     /// The plan does not serialize.
     pub fn to_normalize_json(&self, session: &Session, written: bool) -> Result<String, String> {
+        self.to_write_json(session, "normalize", written)
+    }
+
+    /// Serializes the write plan for a named command.
+    ///
+    /// # Errors
+    ///
+    /// The plan does not serialize.
+    pub fn to_write_json(
+        &self,
+        session: &Session,
+        command: &str,
+        written: bool,
+    ) -> Result<String, String> {
         serde_json::to_string_pretty(&serde_json::json!({
-            "check": "normalize",
+            "check": command,
             "written": written,
             "config_digest": session.cfg.digest,
             "locales": session.locales,
@@ -147,12 +161,29 @@ pub fn plan(
     locales: &[String],
     force_pattern: bool,
 ) -> Result<NormalizeReport, String> {
+    plan_filtered(cfg, store, locales, force_pattern, &|_, _| true)
+}
+
+/// Works out the destination files after rejected locale/key pairs are removed.
+///
+/// # Errors
+///
+/// A selected key cannot be routed, a locale has no data, or a write-safety
+/// guard fails. Nothing is written.
+pub fn plan_filtered(
+    cfg: &Config,
+    store: &Store,
+    locales: &[String],
+    force_pattern: bool,
+    keep: &impl Fn(&str, &str) -> bool,
+) -> Result<NormalizeReport, String> {
     let mut changes = Vec::new();
     let mut files_routed = 0usize;
     let mut claimed: HashMap<PathBuf, String> = HashMap::new();
 
     for locale in locales {
-        let destinations = route::route(cfg, store, locale, force_pattern)?;
+        let destinations =
+            route::route_filtered(cfg, store, locale, force_pattern, &|key| keep(locale, key))?;
         let tree = store
             .tree(locale)
             .ok_or_else(|| format!("locale `{locale}` has no data"))?;

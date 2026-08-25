@@ -660,3 +660,24 @@ symlinked destination is written through rather than replaced, the file keeps
 its mode, and a destination the process cannot write is still an error with the
 same message. That last one needs a probe, because `rename` asks the directory
 for permission and not the file.
+
+## 31. `remove-unused` uses explicit write and deletion flags
+
+**Gem.** `remove-unused` prints the unused tree and asks an interactive yes/no
+question. `-y`, `--confirm`, or any set `CONFIRM` environment variable skips
+the question. After confirmation it writes at once and deletes a locale file
+when no keys remain.
+
+**Here.** The command follows blocker B8, like `normalize`: it prints a plan
+and writes nothing unless `--write` is present. `--dry-run` prints a unified
+diff. If the plan empties a file, `--allow-delete` is also required. There is no
+interactive prompt, `--confirm`, or `CONFIRM` bypass.
+
+The selected key set otherwise follows the gem: locale selection and ignore
+rules apply first, then `--pattern` filters the collapsed unused tree. The
+default rewrite sorts retained keys, and `-k` or `--keep-order` preserves their
+order. A no-match pattern is a no-op and does not normalize the files.
+
+Writes use the same atomic replacement path as `normalize` (difference 30).
+Retained keys use the conservative router, so removal does not move them to a
+new `data.write` destination.
