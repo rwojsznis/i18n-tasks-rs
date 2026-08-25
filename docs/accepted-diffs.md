@@ -684,12 +684,17 @@ default rewrite sorts retained keys, and `-k` or `--keep-order` preserves their
 order. A no-match pattern is a no-op and does not normalize the files.
 
 Writes use the same atomic replacement path as `normalize` (difference 30).
-Retained keys use the conservative router, so removal does not move them to a
-new `data.write` destination.
+Routing follows `data.router`: the conservative router keeps retained keys in
+their origin files, while an explicitly configured pattern router can move them
+to their `data.write` destinations, as it does for the gem.
+
+Unlike the gem's anchored leaf match, a `--pattern` that matches a parent also
+selects its unused descendants. This lets a subtree be selected after its leaf
+rows have been collapsed for reporting.
 
 One plural edge stays safer than the gem. If one plural child is ignored or
 external and another is unused, the gem collapses the partial unused tree to
 the parent and removes the complete plural node, including the protected child.
 This tool collapses only when every child in the locale data is unused, so it
-removes only the unused child. A parent `--pattern` still selects the unused
-descendants, but never expands the removal set to protected data.
+removes only the unused child. Parent selection never expands the removal set
+to protected data.

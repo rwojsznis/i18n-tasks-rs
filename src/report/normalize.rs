@@ -240,6 +240,7 @@ pub fn plan_filtered(
             if written.contains(&path) {
                 continue;
             }
+            check_foreign_locales(tree, &path, locale)?;
             changes.push(FileChange {
                 display: display_path(cfg, &path),
                 locale: locale.clone(),
@@ -277,8 +278,8 @@ fn check_foreign_locales(
         return Ok(());
     }
     Err(format!(
-        "{} holds the locale(s) {} as well as `{locale}`. `normalize` writes one \
-         locale per file, so it would drop them. Split the file by locale first.",
+        "{} holds the locale(s) {} as well as `{locale}`. Writing one locale per \
+         file would drop them. Split the file by locale first.",
         path.display(),
         foreign.join(", ")
     ))

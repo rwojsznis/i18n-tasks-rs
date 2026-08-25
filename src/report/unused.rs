@@ -115,8 +115,9 @@ impl UnusedReport {
         }
     }
 
-    /// Applies `remove-unused --pattern` after plural rows are collapsed, as
-    /// the gem does with `unused_keys.select_keys`.
+    /// Applies `remove-unused --pattern` after plural rows are collapsed.
+    /// A pattern that matches a parent selects its unused descendants; see
+    /// accepted difference 31.
     pub fn select_pattern(&mut self, pattern: &Pattern) {
         self.rows.retain(|row| {
             let mut candidate = Some(row.key.as_str());

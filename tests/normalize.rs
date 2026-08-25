@@ -417,6 +417,48 @@ fn remove_unused_changes_only_the_selected_locale() {
 }
 
 #[test]
+fn remove_unused_refuses_to_delete_a_file_that_holds_an_unselected_locale() {
+    let p = Project::new(
+        "remove-unused-shared-unselected",
+        "base_locale: en\n\
+         locales: [en, de]\n\
+         data:\n\
+         \x20 read:\n\
+         \x20   - config/locales/all.yml\n\
+         search:\n\
+         \x20 paths: [app/]\n",
+    );
+    let contents = "en:\n  stale: English\nde:\n  stale: German\n";
+    p.write("config/locales/all.yml", contents);
+
+    let (code, text) = p.run(&["remove-unused", "en", "--write", "--allow-delete"]);
+    assert_eq!(code, 2, "{text}");
+    assert!(text.contains("holds the locale(s) de"), "{text}");
+    assert_eq!(p.read("config/locales/all.yml"), contents);
+}
+
+#[test]
+fn remove_unused_does_not_apply_duplicate_deletes_for_a_shared_file() {
+    let p = Project::new(
+        "remove-unused-shared-selected",
+        "base_locale: en\n\
+         locales: [en, de]\n\
+         data:\n\
+         \x20 read:\n\
+         \x20   - config/locales/all.yml\n\
+         search:\n\
+         \x20 paths: [app/]\n",
+    );
+    let contents = "en:\n  stale: English\nde:\n  stale: German\n";
+    p.write("config/locales/all.yml", contents);
+
+    let (code, text) = p.run(&["remove-unused", "--write", "--allow-delete"]);
+    assert_eq!(code, 2, "{text}");
+    assert!(text.contains("holds the locale(s) de"), "{text}");
+    assert_eq!(p.read("config/locales/all.yml"), contents);
+}
+
+#[test]
 fn dry_run_prints_a_unified_diff_and_writes_nothing() {
     let p = Project::new("dryrun", SIMPLE);
     p.write("config/locales/en.yml", "en:\n  b: B\n  a: A\n");
