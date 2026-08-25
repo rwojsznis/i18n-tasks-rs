@@ -350,7 +350,7 @@ neither `.rb` nor `.erb`, and a template has no `def` in it.
 
 ## Coverage against the gem
 
-Every file type the port supports — `.rb`, `.erb`, `.slim`, `.js`, `.ts` — was
+Every file type the port supports — `.rb`, `.erb`, `.haml`, `.slim`, `.js`, `.ts` — was
 compared against the gem over the same inputs. `unused` produces no new entries
 relative to the gem on any of them.
 

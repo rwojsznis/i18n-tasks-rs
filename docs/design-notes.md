@@ -182,7 +182,6 @@ Not implemented, on purpose.
 | The whitequark `parser` backend, the `ast` gem, `PatternMapper` | Prism only. Two parsers is the gem's main source of behaviour drift. |
 | `strict: false` as implemented | Replaced by proper Prism dynamic patterns. See B5. |
 | `isolating_router` | ViewComponent sidecar layout; conservative and pattern routers cover the rest. |
-| Haml | No scanner. Slim, ERB, JS and TS are covered. |
 | The reference-key subsystem | See B4. Errors on a reference value instead. |
 | Rails inference — `human_attribute_name`, `model_name.human`, `default_i18n_subject`, `before_action` re-parenting | See accepted diffs 4 and 4a. Cover the resulting `activerecord.*` keys with `ignore_unused`. |
 | A persistent scan cache | A cold run over a few thousand files is well under a second, so there is nothing to buy. Cache bugs are invalidation bugs, and they present as "this key is unused" — the failure mode that deletes a live translation. |

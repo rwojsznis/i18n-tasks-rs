@@ -1,7 +1,7 @@
-//! The regex scanner over Slim and JS, driven by the gem's own fixtures.
+//! The regex scanner over Haml, Slim and JS, driven by the gem's own fixtures.
 //!
-//! Ported from spec/used_keys_slim_spec.rb, spec/pattern_scanner_spec.rb and
-//! spec/pattern_with_scope_scanner_spec.rb. The unit tests in
+//! Ported from spec/used_keys_haml_spec.rb, spec/used_keys_slim_spec.rb,
+//! spec/pattern_scanner_spec.rb and spec/pattern_with_scope_scanner_spec.rb. The unit tests in
 //! `src/scan/template.rs` cover those two scanner specs case by case; this file
 //! covers whole fixture files, which is what the differential harness compares.
 
@@ -32,6 +32,32 @@ fn keys(scan: &FileScan) -> Vec<String> {
     out.sort();
     out.dedup();
     out
+}
+
+/// ref: spec/used_keys_haml_spec.rb
+#[test]
+fn haml_spec_source() {
+    let src = concat!(
+        "#first{ title: t('a') }\n",
+        ".second{ title: t('a') }\n",
+        "- # t('a') in a comment is ignored\n",
+        "-# t('a') in a silent comment is ignored\n",
+    );
+    let scan = scan_file(src.as_bytes(), Path::new("a.html.haml"), &cfg());
+    assert_eq!(keys(&scan), vec!["a"]);
+
+    let occurrences: Vec<_> = scan.keys.iter().map(|(_, occurrence)| occurrence).collect();
+    assert_eq!(occurrences.len(), 2);
+    assert_eq!(occurrences[0].pos, 15);
+    assert_eq!(occurrences[0].line_num, 1);
+    assert_eq!(occurrences[0].line_pos, 15);
+    assert_eq!(occurrences[0].snippet, "#first{ title: t('a') }");
+    assert_eq!(occurrences[0].raw_key, "a");
+    assert_eq!(occurrences[1].pos, 40);
+    assert_eq!(occurrences[1].line_num, 2);
+    assert_eq!(occurrences[1].line_pos, 16);
+    assert_eq!(occurrences[1].snippet, ".second{ title: t('a') }");
+    assert_eq!(occurrences[1].raw_key, "a");
 }
 
 /// ref: spec/used_keys_slim_spec.rb
@@ -199,6 +225,8 @@ fn comment_rules_are_per_extension() {
         ("a.js", "// t('x.a')", false),
         ("a.js", "// i18n-tasks-use t('x.a')", true),
         ("a.coffee", "# t('x.a')", false),
+        ("a.haml", "- # t('x.a')", false),
+        ("a.haml", "-# i18n-tasks-use t('x.a')", true),
         ("a.slim", "-# t('x.a')", false),
         ("a.slim", "/ t('x.a')", false),
         // `.ts` is absent from the gem's table, so its comments are scanned.

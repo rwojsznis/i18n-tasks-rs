@@ -38,7 +38,7 @@ Library uses some "tricks" - like early files _discovery_ to skip work when it's
 - custom scanners - if you need one - feel free to open a PR
 
 ## What works
-- `erb`, `slim`, `js`, `tsx`, `jsx` (and more via regexp) scanning (no haml support yet)
+- `erb`, `haml`, `slim`, `js`, `tsx`, `jsx` (and more via regexp) scanning
 -  `missing` / `unused` / `check-consistent-interpolations` / `check-reserved-interpolations` / `check-normalized` (+ `health` which wraps all commands), `eq-base`
 - `normalize` - yet it will yield slightly different yaml format than gem! also see `--pattern-router` / `--allow-delete` switches
 - `# i18n-tasks-use` comment hints (might cause some quirks, feel feel free to report any issues)

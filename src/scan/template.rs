@@ -1,5 +1,5 @@
-//! The regex scanner: Slim, JS, TS, and every extension that is not `.rb` or
-//! `.erb`.
+//! The regex scanner: Haml, Slim, JS, TS, and every extension that is not `.rb`
+//! or `.erb`.
 //!
 //! ref: lib/i18n/tasks/scanners/pattern_scanner.rb
 //! ref: lib/i18n/tasks/scanners/pattern_with_scope_scanner.rb
@@ -305,6 +305,7 @@ fn is_comment_line(ext: &str, line: &[u8]) -> bool {
     let markers: &[&str] = match ext {
         "coffee" | "opal" => &["#"],
         "es6" | "js" => &["//"],
+        "haml" => &[],
         "slim" => &["-#", "/"],
         // The gem's table has an `erb` entry, but its regex scanner never sees
         // an `.erb` file: `ErbAstScanner` handles those, and so does `erb.rs`.
@@ -312,6 +313,16 @@ fn is_comment_line(ext: &str, line: &[u8]) -> bool {
     };
     let line = String::from_utf8_lossy(line);
     let trimmed = line.trim_start();
+    // ref: pattern_scanner.rb:20 `^\s*-\s*#(?!\si18n-tasks-use)`
+    if ext == "haml"
+        && let Some(rest) = trimmed.strip_prefix('-')
+        && let Some(rest) = rest.trim_start().strip_prefix('#')
+    {
+        let keeps_magic = rest
+            .strip_prefix(char::is_whitespace)
+            .is_some_and(|rest| rest.starts_with("i18n-tasks-use"));
+        return !keeps_magic;
+    }
     for marker in markers {
         if let Some(rest) = trimmed.strip_prefix(marker) {
             let keeps_magic = rest
