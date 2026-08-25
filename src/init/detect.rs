@@ -63,7 +63,7 @@ impl Shape {
     ///
     /// `LocaleDir` and `LocaleDirDeep` are two patterns and not one because the
     /// loader's `**` becomes `.*` between two slashes: `%{locale}/**/*.yml`
-    /// never matches `en/models.yml`. ref: data/load.rs#locale_pattern_re.
+    /// never matches `en/models.yml`. ref: data/load/locale_path.rs#locale_pattern_re.
     fn pattern(self, dir: &str, ext: &str) -> String {
         match self {
             Shape::Flat => format!("{dir}/%{{locale}}.{ext}"),

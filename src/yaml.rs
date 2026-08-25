@@ -182,12 +182,12 @@ pub fn is_null_scalar(node: &Node) -> bool {
 /// What Psych reads a **plain** (unquoted) scalar as, in the subset of YAML 1.1
 /// locale data can hold. ref: `psych/lib/psych/scalar_scanner.rb#tokenize`.
 ///
-/// One answer, two callers: `to_value` in `src/data/load.rs` classifies a
-/// scalar with it, and `style_of` in `src/data/emit.rs` decides from the same
-/// answer whether the value needs quotes. Two predicates for the one question
-/// drifted apart once already — the loader read `0x1f` as a string and the
-/// emitter then quoted it, so `normalize --write` turned the integer 31 into
-/// the string `"0x1f"`.
+/// One answer, two callers: `to_value` in `src/data/load/mod.rs` classifies a
+/// scalar with it, and `style_of` in `src/data/emit/scalar.rs` decides from
+/// the same answer whether the value needs quotes. Two predicates for the one
+/// question drifted apart once already — the loader read `0x1f` as a string
+/// and the emitter then quoted it, so `normalize --write` turned the integer
+/// 31 into the string `"0x1f"`.
 ///
 /// The two halves are not equally strict, and deliberately so:
 ///

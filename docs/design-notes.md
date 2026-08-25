@@ -63,7 +63,7 @@ it, normalizes block scalar styles (`|+`→`|`, `>`→`|`, `>+`→`|`, `>-`→`|
 folds long lines at `line_width`, escapes non-BMP characters as `\Uxxxxxxxx`,
 and emits trailing spaces in some folded output.
 
-**Decision.** Hand-write the emitter (`src/data/emit.rs`); no general YAML
+**Decision.** Hand-write the emitter (`src/data/emit/`); no general YAML
 emitter. Never fold lines, which removes the whole line-width class of bugs and
 keeps diffs stable. Correctness is *value preservation plus idempotence*, not
 byte equality with Psych.
@@ -210,7 +210,7 @@ without them.
 
 `file_system_base.rb:122-124` builds an anchored regex out of the read pattern:
 `%{locale}` becomes `([^/.]+)`, which a dotted file name cannot satisfy.
-`src/data/load.rs#locale_pattern_re` does the same, `**` and all.
+`src/data/load/locale_path.rs#locale_pattern_re` does the same, `**` and all.
 
 Anchoring on the literal tail of the pattern prefix instead cannot tell
 `config/locales/%{locale}.yml` from `config/locales/*%{locale}.yml`: the glob

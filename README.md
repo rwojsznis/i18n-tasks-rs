@@ -210,11 +210,11 @@ An unknown key is an error, with the supported list in the message.
 | `src/keys.rs` | key splitting and `ActiveSupport#underscore` |
 | `src/discover.rs` | the file walk and the aho-corasick prefilter |
 | `src/lineindex.rs` | one line-offset index per file |
-| `src/scan/ruby.rs` | the Prism visitor — the core |
+| `src/scan/ruby/` | the Prism visitor — the core; key, args, magic, nodes |
 | `src/scan/erb.rs` | ERB tags to one Ruby buffer per file, plus a source map |
 | `src/scan/template.rs` | Slim, JS, TS and every other extension, by regex |
-| `src/data/load.rs` | YAML reading, one flat key map per locale |
-| `src/data/emit.rs` | the hand-written YAML emitter (B1) |
+| `src/data/load/` | YAML reading, one flat key map per locale; glob, locale paths |
+| `src/data/emit/` | the hand-written YAML emitter (B1); the writer and the scalar rules |
 | `src/data/route.rs` | the conservative and pattern routers |
 | `src/plural.rs` | plural nodes and the static CLDR table (B7) |
 | `src/report/` | `unused`, `missing`, `eq-base`, the interpolation checks, `normalize` |

@@ -431,7 +431,7 @@ character itself, so `headline: "Error 500 👩‍🚒"` becomes `headline: Erro
 
 ## 20. Quoting is rule-based, and Q2 copies Psych on purpose
 
-`style_of` in `src/data/emit.rs` documents rules Q1 to Q7, each with its own
+`style_of` in `src/data/emit/scalar.rs` documents rules Q1 to Q7, each with its own
 test. Six of them are what the YAML grammar requires. Q2 is not: it copies
 Psych's `/^[^[:word:]][^"]*$/` verbatim, which quotes more than the grammar
 needs.
