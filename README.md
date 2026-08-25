@@ -2,8 +2,12 @@
 
 
 # i18n-tasks-rs
+[![GitHub Release](https://img.shields.io/github/v/release/rwojsznis/i18n-tasks-rs)](https://github.com/rwojsznis/i18n-tasks-rs/releases/latest)
+[![codecov](https://codecov.io/gh/rwojsznis/i18n-tasks-rs/graph/badge.svg?token=70FFG3ZC0C)](https://codecov.io/gh/rwojsznis/i18n-tasks-rs)
+[![CI](https://github.com/rwojsznis/i18n-tasks-rs/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/rwojsznis/i18n-tasks-rs/actions/workflows/ci.yml?query=branch%3Amain)
 
-tldr: Stripped down and simplified Rust port of [i18n-tasks](https://github.com/glebm/i18n-tasks) gem. Up to 70x faster - for all your git hooks and CI needs.
+> [!NOTE]
+> tldr: Stripped down and simplified Rust port of [i18n-tasks](https://github.com/glebm/i18n-tasks) gem. Up to 70x faster - for all your git hooks and CI needs.
 
 ## Why?
 
