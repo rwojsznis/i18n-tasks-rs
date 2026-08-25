@@ -38,7 +38,10 @@ compared over the same project.
 | `src/scan/erb.rs` | ERB tags → one Ruby buffer per file, plus a source map |
 | `src/scan/template.rs` | Slim, JS, TS and everything else, by regex |
 | `src/data/` | YAML load, the hand-written emitter (B1), the two routers |
-| `src/report/` | `unused`, `missing`, interpolation checks, `normalize` |
+| `src/report/` | `unused`, `missing`, interpolation checks, `normalize`, `find` |
+| `src/session.rs` | the config, the data and the resolved locale list, loaded once |
+| `src/check.rs` | the CLI's name per check, and the two `-f json` envelopes |
+| `src/main.rs` | clap only: the flags, the printing macros, one fn per command |
 | `tests/` | integration tests; `tests/fixtures/` holds the gem's own fixtures |
 | `docs/` | design notes and accepted diffs |
 
