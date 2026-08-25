@@ -11,15 +11,14 @@
 #![warn(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use clap::{Parser, Subcommand};
-use i18n_tasks_rs::config::{Config, DEFAULT_CONFIG_PATH};
-use i18n_tasks_rs::data::load::Store;
+use i18n_tasks_rs::check::{Check, any_found, health_json};
+use i18n_tasks_rs::config::DEFAULT_CONFIG_PATH;
 use i18n_tasks_rs::report::missing::MissingType;
-use i18n_tasks_rs::report::{Outcome, eq_base, interpolations, missing, normalize, unused};
-use i18n_tasks_rs::stats::{ForestStats, forest_stats};
+use i18n_tasks_rs::report::{Outcome, eq_base, find, interpolations, missing, normalize, unused};
+use i18n_tasks_rs::session::{Session, SessionOptions};
+use i18n_tasks_rs::stats::forest_stats;
 use i18n_tasks_rs::used::UsedKeys;
 use i18n_tasks_rs::{clean_config, init, migrate};
-use serde::ser::SerializeMap;
-use serde::{Serialize, Serializer};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -89,7 +88,7 @@ struct Cli {
 }
 
 /// Sizes the `rayon` pool the scan fans out over. Called once, from
-/// `Session::open`, so `--jobs` belongs to the commands that read a project and
+/// `Common::open`, so `--jobs` belongs to the commands that read a project and
 /// not to `migrate-config`, which scans nothing.
 ///
 /// Without `--jobs`, `rayon` uses the core count.
@@ -175,57 +174,22 @@ impl Common {
             .cloned()
             .collect()
     }
-}
 
-/// ref: lib/i18n/tasks/command/option_parsers/locale.rb#ListParser
-///
-/// An empty list, or a lone `all`, means every configured locale. Otherwise
-/// `base` stands in for the base locale, and if the base locale lands anywhere
-/// but first it is swapped to the front, so a report always starts there.
-fn resolve_locales(requested: &[String], store: &Store) -> Result<Vec<String>, String> {
-    if requested.is_empty() || requested == ["all"] {
-        return Ok(store.locales.clone());
+    /// Sizes the pool, then loads the project.
+    ///
+    /// The pool is installed here rather than in `Session::open` because it is
+    /// a process-global side effect: the library reads a project, and the
+    /// binary decides how many threads the process runs on.
+    fn open(&self) -> Result<Session, String> {
+        install_pool(self.jobs)?;
+        let opts = SessionOptions {
+            config: &self.config,
+            root: self.root.as_deref(),
+            locales: self.requested_locales(),
+            json: self.format == Format::Json,
+        };
+        Session::open(&opts, |warning| errln!("warning: {warning}"))
     }
-    let mut locales: Vec<String> = requested
-        .iter()
-        .map(|l| {
-            if l == "base" {
-                store.base_locale.clone()
-            } else {
-                l.clone()
-            }
-        })
-        .collect();
-    // ref: ListParser#move_base_locale_to_front!. A swap, not a rotation: the
-    // locale that held the front takes the base locale's old slot.
-    if let Some(pos) = locales
-        .iter()
-        .position(|l| *l == store.base_locale)
-        .filter(|p| *p > 0)
-    {
-        locales.swap(0, pos);
-    }
-    for l in &locales {
-        // ref: Locale::Validator::VALID_LOCALE_RE. Reported before the
-        // membership check so a typo like `-l en,` names the real problem.
-        if !valid_locale(l) {
-            return Err(format!("invalid locale `{l}`"));
-        }
-        if !store.locales.contains(l) {
-            return Err(format!(
-                "unknown locale `{l}`. Configured locales: {}",
-                store.locales.join(", ")
-            ));
-        }
-    }
-    Ok(locales)
-}
-
-/// ref: `/\A\w[\w\-.]*\z/i`. Ruby's `\w` here is ASCII-only.
-fn valid_locale(locale: &str) -> bool {
-    let mut chars = locale.chars();
-    let first_ok = matches!(chars.next(), Some(c) if c.is_ascii_alphanumeric() || c == '_');
-    first_ok && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
 }
 
 #[derive(Subcommand)]
@@ -474,99 +438,11 @@ fn main() -> ExitCode {
     }
 }
 
-/// Everything the commands share, loaded once.
-struct Session {
-    cfg: Config,
-    store: Store,
-    locales: Vec<String>,
-    json: bool,
-}
-
-impl Session {
-    fn open(common: &Common) -> Result<Session, String> {
-        install_pool(common.jobs)?;
-        let cfg = Config::load(&common.config, common.root.as_deref())?;
-        let store = Store::load(&cfg)?;
-        for warning in &store.warnings {
-            errln!("warning: {warning}");
-        }
-        let locales = resolve_locales(&common.requested_locales(), &store)?;
-        Ok(Session {
-            cfg,
-            store,
-            locales,
-            json: common.format == Format::Json,
-        })
-    }
-
-    fn scan(&self) -> Result<UsedKeys, String> {
-        UsedKeys::scan(&self.cfg)
-    }
-}
-
-/// One check's result, under the name the CLI and the JSON report it by.
-///
-/// The name belongs to the command, not to the report type: `InterpolationReport`
-/// serves two checks, and `NormalizeReport` serves `check-normalized` as well as
-/// `normalize`. So an associated const on the report type cannot carry it, and
-/// this enum carries it instead. It lives here rather than in `report` because
-/// these are the CLI's names for things.
-///
-/// `run` names a check once, then `emit` and `health` both read the name, the
-/// outcome and the text out of it.
-#[derive(Serialize)]
-#[serde(untagged)]
-enum Check {
-    Missing(missing::MissingReport),
-    Unused(unused::UnusedReport),
-    EqBase(eq_base::EqBaseReport),
-    ConsistentInterpolations(interpolations::InterpolationReport),
-    ReservedInterpolations(interpolations::InterpolationReport),
-    Normalized(normalize::NormalizeReport),
-}
-
-impl Check {
-    /// The `check` field of the JSON envelope, and the field name `health`
-    /// nests the report under.
-    fn name(&self) -> &'static str {
-        match self {
-            Check::Missing(_) => "missing",
-            Check::Unused(_) => "unused",
-            Check::EqBase(_) => "eq_base",
-            Check::ConsistentInterpolations(_) => "check_consistent_interpolations",
-            Check::ReservedInterpolations(_) => "check_reserved_interpolations",
-            Check::Normalized(_) => "check_normalized",
-        }
-    }
-
-    fn outcome(&self) -> Outcome {
-        match self {
-            Check::Missing(r) => r.outcome(),
-            Check::Unused(r) => r.outcome(),
-            Check::EqBase(r) => r.outcome(),
-            Check::ConsistentInterpolations(r) | Check::ReservedInterpolations(r) => r.outcome(),
-            Check::Normalized(r) => r.outcome(),
-        }
-    }
-
-    fn to_text(&self) -> String {
-        match self {
-            Check::Missing(r) => r.to_text(),
-            Check::Unused(r) => r.to_text(),
-            Check::EqBase(r) => r.to_text(),
-            Check::ConsistentInterpolations(r) | Check::ReservedInterpolations(r) => r.to_text(),
-            // `normalize` prints the same report differently, so the report has
-            // two renderers and this is the read-only one.
-            Check::Normalized(r) => r.to_check_text(),
-        }
-    }
-}
-
 fn run() -> Result<u8, String> {
     let cli = Cli::parse();
     match &cli.command {
         Command::Missing { common, types } => {
-            let s = Session::open(common)?;
+            let s = common.open()?;
             // No `--types` means all three, which clap cannot express as a
             // default without also accepting an explicitly empty list.
             let types = types.clone().unwrap_or_else(|| MissingType::ALL.to_vec());
@@ -575,28 +451,28 @@ fn run() -> Result<u8, String> {
             emit(&s, &Check::Missing(report))
         }
         Command::Unused { common } => {
-            let s = Session::open(common)?;
+            let s = common.open()?;
             let used = s.scan()?;
             let report = unused::report(&s.cfg, &s.store, &used, &s.locales);
             emit(&s, &Check::Unused(report))
         }
         Command::EqBase { common } => {
-            let s = Session::open(common)?;
+            let s = common.open()?;
             let report = eq_base::report(&s.cfg, &s.store, &s.locales);
             emit(&s, &Check::EqBase(report))
         }
         Command::CheckConsistentInterpolations { common } => {
-            let s = Session::open(common)?;
+            let s = common.open()?;
             let report = interpolations::inconsistent(&s.cfg, &s.store, &s.locales);
             emit(&s, &Check::ConsistentInterpolations(report))
         }
         Command::CheckReservedInterpolations { common } => {
-            let s = Session::open(common)?;
+            let s = common.open()?;
             let report = interpolations::reserved(&s.store, &s.locales);
             emit(&s, &Check::ReservedInterpolations(report))
         }
         Command::CheckNormalized { common } => {
-            let s = Session::open(common)?;
+            let s = common.open()?;
             // `false` is `force_pattern`: the conservative router, which keeps
             // every existing key in the file it is already in, so this reports
             // formatting only and never a move.
@@ -604,13 +480,13 @@ fn run() -> Result<u8, String> {
             emit(&s, &Check::Normalized(report))
         }
         Command::Normalize { common, flags } => {
-            let s = Session::open(common)?;
+            let s = common.open()?;
             normalize_command(&s, flags)
         }
         Command::CleanConfig { common, write } => clean_config_command(common, *write),
         Command::Health { common } => health(common),
         Command::Find { common } => {
-            let s = Session::open(common)?;
+            let s = common.open()?;
             let used = s.scan()?;
             find_output(&s, &used)
         }
@@ -622,7 +498,7 @@ fn run() -> Result<u8, String> {
 fn clean_config_command(common: &Common, write: bool) -> Result<u8, String> {
     let source = std::fs::read_to_string(&common.config)
         .map_err(|e| format!("cannot read config {}: {e}", common.config.display()))?;
-    let session = Session::open(common)?;
+    let session = common.open()?;
     let used = session.scan()?;
     let report = clean_config::plan(
         &session.cfg,
@@ -633,17 +509,7 @@ fn clean_config_command(common: &Common, write: bool) -> Result<u8, String> {
         &common.config,
     )?;
     if session.json {
-        outln!(
-            "{}",
-            serde_json::to_string_pretty(&serde_json::json!({
-                "check": "clean_config",
-                "written": write && report.has_edit(),
-                "config_digest": session.cfg.digest,
-                "locales": session.locales,
-                "stale_rules": report.stale_rules,
-            }))
-            .map_err(|e| e.to_string())?
-        );
+        outln!("{}", report.to_json(&session, write && report.has_edit())?);
     } else {
         out!("{}", report.diff());
         out!("{}", report.manual_note());
@@ -737,26 +603,7 @@ fn migrate_config(flags: &MigrateFlags) -> Result<u8, String> {
 fn emit(session: &Session, check: &Check) -> Result<u8, String> {
     let outcome = check.outcome();
     if session.json {
-        #[derive(Serialize)]
-        struct Envelope<'a> {
-            check: &'a str,
-            passed: bool,
-            config_digest: &'a str,
-            locales: &'a [String],
-            #[serde(flatten)]
-            report: &'a Check,
-        }
-        let env = Envelope {
-            check: check.name(),
-            passed: outcome == Outcome::Clean,
-            config_digest: &session.cfg.digest,
-            locales: &session.locales,
-            report: check,
-        };
-        outln!(
-            "{}",
-            serde_json::to_string_pretty(&env).map_err(|e| e.to_string())?
-        );
+        outln!("{}", check.to_json(session)?);
     } else {
         out!("{}", check.to_text());
     }
@@ -772,7 +619,7 @@ fn emit(session: &Session, check: &Check) -> Result<u8, String> {
 /// Every check runs, even after one fails: the gem builds the result array
 /// eagerly and only then calls `.detect`, so there is no short-circuit.
 fn health(common: &Common) -> Result<u8, String> {
-    let s = Session::open(common)?;
+    let s = common.open()?;
     let stats = forest_stats(&s.store, &s.locales);
     // A silent pass on an empty data set is the worst possible outcome.
     if stats.key_count == 0 {
@@ -795,20 +642,10 @@ fn health(common: &Common) -> Result<u8, String> {
         Check::Normalized(normalize::plan(&s.cfg, &s.store, &s.locales, false)?),
     ];
 
-    let found = checks.iter().any(|c| c.outcome() == Outcome::Found);
+    let found = any_found(&checks);
 
     if s.json {
-        outln!(
-            "{}",
-            serde_json::to_string_pretty(&Health {
-                passed: !found,
-                config_digest: &s.cfg.digest,
-                locales: &s.locales,
-                stats: &stats,
-                checks: &checks,
-            })
-            .map_err(|e| e.to_string())?
-        );
+        outln!("{}", health_json(&s, &stats, &checks)?);
     } else {
         outln!("{}", stats.to_text());
         for check in &checks {
@@ -817,36 +654,6 @@ fn health(common: &Common) -> Result<u8, String> {
         }
     }
     Ok(if found { EXIT_FOUND } else { EXIT_OK })
-}
-
-/// The `health` envelope: the shared four fields, the statistics header, then
-/// one field per check, named by `Check::name`.
-///
-/// Written by hand rather than derived, because the field names come from the
-/// checks at run time. A `serde_json::Map` would not do: without the
-/// `preserve_order` feature it is a `BTreeMap`, so the five reports would come
-/// out in alphabetical order instead of report order.
-struct Health<'a> {
-    passed: bool,
-    config_digest: &'a str,
-    locales: &'a [String],
-    stats: &'a ForestStats,
-    checks: &'a [Check],
-}
-
-impl Serialize for Health<'_> {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let mut map = serializer.serialize_map(Some(5 + self.checks.len()))?;
-        map.serialize_entry("check", "health")?;
-        map.serialize_entry("passed", &self.passed)?;
-        map.serialize_entry("config_digest", self.config_digest)?;
-        map.serialize_entry("locales", self.locales)?;
-        map.serialize_entry("stats", self.stats)?;
-        for check in self.checks {
-            map.serialize_entry(check.name(), check)?;
-        }
-        map.end()
-    }
 }
 
 /// ref: blocker B8. `--write` is required, `--dry-run` prints the diff, and a
@@ -865,18 +672,7 @@ fn normalize_command(s: &Session, flags: &NormalizeFlags) -> Result<u8, String> 
         }
     }
     if s.json {
-        outln!(
-            "{}",
-            serde_json::to_string_pretty(&serde_json::json!({
-                "check": "normalize",
-                "written": flags.write,
-                "config_digest": s.cfg.digest,
-                "locales": s.locales,
-                "changes": report.changes,
-                "files_routed": report.files_routed,
-            }))
-            .map_err(|e| e.to_string())?
-        );
+        outln!("{}", report.to_normalize_json(s, flags.write)?);
     } else {
         out!("{}", report.to_normalize_text(flags.dry_run));
     }
@@ -899,90 +695,9 @@ fn normalize_command(s: &Session, flags: &NormalizeFlags) -> Result<u8, String> 
 /// gem over the same project.
 fn find_output(session: &Session, used: &UsedKeys) -> Result<u8, String> {
     if session.json {
-        #[derive(Serialize)]
-        struct Row<'a> {
-            key: &'a str,
-            occurrences: Vec<Loc<'a>>,
-        }
-        #[derive(Serialize)]
-        struct Loc<'a> {
-            path: String,
-            line: usize,
-            column: usize,
-            raw_key: &'a str,
-            candidate_keys: &'a [String],
-        }
-        #[derive(Serialize)]
-        struct Out<'a> {
-            check: &'static str,
-            config_digest: &'a str,
-            files_scanned: usize,
-            files_prefiltered: usize,
-            keys: Vec<Row<'a>>,
-            patterns: Vec<&'a str>,
-            opaque: Vec<Loc<'a>>,
-        }
-        let keys = used
-            .keys
-            .iter()
-            .map(|(key, occs)| Row {
-                key,
-                occurrences: occs
-                    .iter()
-                    .map(|o| Loc {
-                        path: o.path.display().to_string(),
-                        line: o.line_num,
-                        column: o.line_pos,
-                        raw_key: &o.raw_key,
-                        candidate_keys: &o.candidate_keys,
-                    })
-                    .collect(),
-            })
-            .collect();
-        let mut patterns: Vec<&str> = used
-            .pattern_sources
-            .iter()
-            .map(|(p, _)| p.as_str())
-            .collect();
-        patterns.sort_unstable();
-        patterns.dedup();
-        let out = Out {
-            check: "find",
-            config_digest: &session.cfg.digest,
-            files_scanned: used.files_scanned,
-            files_prefiltered: used.files_prefiltered,
-            keys,
-            patterns,
-            opaque: used
-                .opaque
-                .iter()
-                .map(|o| Loc {
-                    path: o.path.display().to_string(),
-                    line: o.line_num,
-                    column: o.line_pos,
-                    raw_key: &o.raw_key,
-                    candidate_keys: &o.candidate_keys,
-                })
-                .collect(),
-        };
-        outln!(
-            "{}",
-            serde_json::to_string_pretty(&out).map_err(|e| e.to_string())?
-        );
+        outln!("{}", find::to_json(used, &session.cfg.digest)?);
     } else {
-        for (key, occs) in &used.keys {
-            outln!("{key}");
-            for o in occs {
-                outln!("  {}:{}:{}", o.path.display(), o.line_num, o.line_pos);
-            }
-        }
-        for (pattern, occ) in &used.pattern_sources {
-            outln!("{pattern}  (pattern)");
-            outln!("  {}:{}", occ.path.display(), occ.line_num);
-        }
-        for o in &used.opaque {
-            outln!("(opaque)  {}:{}", o.path.display(), o.line_num);
-        }
+        out!("{}", find::to_text(used));
     }
     Ok(EXIT_OK)
 }

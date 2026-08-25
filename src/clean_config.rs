@@ -4,6 +4,7 @@ use crate::config::{Config, IgnoreSpec};
 use crate::data::load::Store;
 use crate::pattern::PatternSet;
 use crate::report::{eq_base, interpolations, missing, unused};
+use crate::session::Session;
 use crate::used::UsedKeys;
 use crate::yaml::{self, Node};
 use serde::Serialize;
@@ -322,6 +323,23 @@ impl CleanConfigReport {
              and run this again.\n"
         ));
         note
+    }
+
+    /// The `clean-config` envelope. `written` follows the file, not the
+    /// finding: a run that leaves only manual rules writes nothing.
+    ///
+    /// # Errors
+    ///
+    /// The stale-rule list does not serialize.
+    pub fn to_json(&self, session: &Session, written: bool) -> Result<String, String> {
+        serde_json::to_string_pretty(&serde_json::json!({
+            "check": "clean_config",
+            "written": written,
+            "config_digest": session.cfg.digest,
+            "locales": session.locales,
+            "stale_rules": self.stale_rules,
+        }))
+        .map_err(|e| e.to_string())
     }
 
     pub fn diff(&self) -> String {

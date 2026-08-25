@@ -13,6 +13,7 @@ use crate::config::Config;
 use crate::data::emit::{Tree, emit_locale};
 use crate::data::load::Store;
 use crate::data::route;
+use crate::session::Session;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -104,6 +105,25 @@ impl NormalizeReport {
             }
         }
         out
+    }
+
+    /// The `normalize` envelope. `check-normalized` reports the same plan
+    /// through the shared check envelope instead, so this one is separate:
+    /// it names the command that writes, and `written` is what it adds.
+    ///
+    /// # Errors
+    ///
+    /// The plan does not serialize.
+    pub fn to_normalize_json(&self, session: &Session, written: bool) -> Result<String, String> {
+        serde_json::to_string_pretty(&serde_json::json!({
+            "check": "normalize",
+            "written": written,
+            "config_digest": session.cfg.digest,
+            "locales": session.locales,
+            "changes": self.changes,
+            "files_routed": self.files_routed,
+        }))
+        .map_err(|e| e.to_string())
     }
 }
 
