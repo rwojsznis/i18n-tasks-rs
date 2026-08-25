@@ -230,6 +230,7 @@ An unknown key is an error, with the supported list in the message.
 ```bash
 cargo test
 cargo clippy --all-targets -- -D warnings
+RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --document-private-items
 cargo fmt --check
 ```
 

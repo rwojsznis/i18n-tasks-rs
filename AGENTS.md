@@ -64,15 +64,16 @@ CLI-level tests live in `tests/`.
 ```bash
 cargo test --quiet                           # full suite; show details only on failure
 cargo clippy --all-targets -- -D warnings
+RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --document-private-items
 cargo fmt
 ```
 
 Keep successful test output brief. We care about failures: if the quiet test
 run fails, inspect and report the complete failure output.
 
-Do not report a change as finished until all three are green. If something is
-left failing or unfinished, say so explicitly rather than narrowing the scope
-quietly.
+Do not report a change as finished until every one of them is green. If
+something is left failing or unfinished, say so explicitly rather than narrowing
+the scope quietly.
 
 ## Where tests go
 

@@ -305,7 +305,11 @@ Not behaviour differences, and not visible in the output.
   a panic *is* the failure report. `clippy.toml` exempts the unit tests inside
   `src/`. Four dependencies were declared and never imported (`anyhow`,
   `fancy-regex`, `ignore`, `smallvec`); `cargo machete` runs in CI so that
-  cannot come back.
+  cannot come back. Two more checks sit beside it in the lint job: `cargo audit`
+  over the lock file, and `cargo doc --document-private-items` with
+  `-D rustdoc::broken_intra_doc_links`, because the intra-doc links between the
+  module notes are otherwise unchecked and nearly every documented item here is
+  private.
 - **`rayon` changed no behaviour**, which is the point of design decision 4.
   Every differential report is byte-identical to its single-threaded version,
   and `tests/jobs.rs` holds the output identical at every `--jobs` setting.

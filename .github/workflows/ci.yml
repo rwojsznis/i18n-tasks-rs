@@ -34,12 +34,28 @@ jobs:
       - name: cargo clippy
         run: cargo clippy --all-targets -- -D warnings
 
+      # The doc comments carry the `ref:` citations and the intra-doc links
+      # between them. `--document-private-items` is what makes that worth
+      # running: nearly every documented item in this crate is private.
+      - name: cargo doc
+        run: cargo doc --no-deps --document-private-items
+        env:
+          RUSTDOCFLAGS: -D warnings -D rustdoc::broken_intra_doc_links
+
       # Four dependencies were declared and never imported. `cargo clippy`
       # cannot see that, so this is what keeps the manifest honest.
       - name: cargo machete
         run: |
           cargo install --locked cargo-machete
           cargo machete
+
+      # Vulnerabilities in the lock file fail the job; an unmaintained or
+      # yanked crate is only printed, because `--deny warnings` would turn a
+      # green main red without a change here.
+      - name: cargo audit
+        run: |
+          cargo install --locked cargo-audit
+          cargo audit
 
   test:
     name: Test (${{ matrix.os }})
