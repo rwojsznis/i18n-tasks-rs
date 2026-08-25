@@ -3,7 +3,7 @@
 
 # i18n-tasks-rs
 
-tldr: Stripped down and simplified Rust port of [i18n-tasks](github.com/glebm/i18n-tasks) gem. Up to 70x faster - for all your git hooks and CI needs.
+tldr: Stripped down and simplified Rust port of [i18n-tasks](https://github.com/glebm/i18n-tasks) gem. Up to 70x faster - for all your git hooks and CI needs.
 
 ## Why?
 
@@ -22,12 +22,12 @@ I love `i18n-tasks` and it served me well for many years, but having it on git h
 (powered by [hyperfine](https://github.com/sharkdp/hyperfine) - ran on real production project with 3 locales; idle Macbook Pro M1 Max, Ruby 4.0.6, Rust 1.98.0)
 ## Was this LLMed?
 
-Obviously. What isn't those days? I tried to take different approach and contribute to i18n-tasks instead - there was a brief discussion [about caching](https://github.com/glebm/i18n-tasks) and some ideas about [multi-process](https://github.com/glebm/i18n-tasks) approach. However I quickly realized that patching ruby gem will never yield desired speedups. There is just too much [baggage](https://nesbitt.io/2025/12/26/how-uv-got-so-fast.html). The fact that [prism](https://github.com/ruby/prism) was released with rust bindings - it was just too good not to use.
+Obviously. What isn't those days? I tried to take different approach and contribute to i18n-tasks instead - there was a brief discussion [about caching](https://github.com/glebm/i18n-tasks/issues/753) and some ideas about [multi-process](https://github.com/glebm/i18n-tasks/pull/754) approach. However I quickly realized that patching ruby gem will never yield desired speedups. There is just too much [baggage](https://nesbitt.io/2025/12/26/how-uv-got-so-fast.html). The fact that [prism](https://github.com/ruby/prism) was released with rust bindings - it was just too good not to use.
 
 Library uses some "tricks" - like early files _discovery_ to skip work when it's not needed, parallel execution, cheaper data structures to avoid overhead - but most gain comes from prism and just not loading Ruby at all. It doesn't aim to be 100% compatible with original i18n-tasks behavior or feature set.
 
 ## Who is this for?
-- you have stablished Rails project with medium+ amount of translation keys/locales
+- you have established Rails project with medium+ amount of translation keys/locales
 - you are using `i18n-tasks` already as part of git hooks / CI; ideally with `prism` as scanner
 - you care mostly about checks and normalization, not so much about yaml tree operations/translations management
 
@@ -38,7 +38,7 @@ Library uses some "tricks" - like early files _discovery_ to skip work when it's
 - custom scanners - if you need one - feel free to open a PR
 
 ## What works
-- `erb`, `slim`, `js`, `tsx`, `jsx` (and more) scanning (no haml support yet)
+- `erb`, `slim`, `js`, `tsx`, `jsx` (and more via regexp) scanning (no haml support yet)
 -  `missing` / `unused` / `check-consistent-interpolations` / `check-reserved-interpolations` / `check-normalized` (+ `health` which wraps all commands), `eq-base`
 - `normalize` - yet it will yield slightly different yaml format than gem! also see `--pattern-router` / `--allow-delete` switches
 - `# i18n-tasks-use` comment hints (might cause some quirks, feel feel free to report any issues)
