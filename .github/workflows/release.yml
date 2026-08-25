@@ -27,7 +27,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - name: Check out repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       - name: Install stable Rust
         run: rustup update stable --no-self-update && rustup default stable
@@ -39,7 +39,7 @@ jobs:
         run: tar -C target/${{ matrix.target }}/release -czf ${{ matrix.archive }} i18n-tasks-rs
 
       - name: Upload binary archive
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ${{ matrix.target }}
           path: ${{ matrix.archive }}
@@ -53,7 +53,7 @@ jobs:
       contents: write
     steps:
       - name: Download binary archives
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
         with:
           path: dist
           merge-multiple: true
