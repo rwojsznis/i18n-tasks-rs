@@ -34,7 +34,7 @@ compared over the same project.
 | `src/pattern.rs` | the key-pattern DSL as a segment matcher (B2) |
 | `src/walk.rs` | the one directory walk; the callers pass the prune rule |
 | `src/discover.rs` | glob filters over the walk + aho-corasick prefilter |
-| `src/scan/ruby.rs` | the Prism visitor — the core |
+| `src/scan/ruby/` | the Prism visitor — the core; key, args, magic, nodes |
 | `src/scan/erb.rs` | ERB tags → one Ruby buffer per file, plus a source map |
 | `src/scan/template.rs` | Slim, JS, TS and everything else, by regex |
 | `src/data/` | YAML load, the hand-written emitter (B1), the two routers |

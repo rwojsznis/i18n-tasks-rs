@@ -7,12 +7,21 @@
 //! tree. The gem's
 //! `select_nodes` deep-copies every matching node through `node.derive`
 //! (`data/tree/traversal.rb:93-128`), which is 2.04 s of a 5.5 s `unused` run.
+//!
+//! This module holds the locale trees and the read itself. The two questions
+//! that come before it are next door: `glob` turns a pattern into the paths
+//! that exist, and `locale_path` says which locale a path names.
+
+mod glob;
+mod locale_path;
+
+use glob::glob_paths;
+use locale_path::available_locales;
+pub use locale_path::locale_for_path;
 
 use crate::config::{Config, interpolate_locale};
-use crate::walk::{Descend, walk};
 use crate::yaml::{self, Node, Resolved};
 use rayon::prelude::*;
-use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -344,93 +353,6 @@ fn normalize_locale_list(locales: &[String], base: &str) -> Vec<String> {
     out
 }
 
-/// ref: lib/i18n/tasks/data/file_system_base.rb#available_locales
-fn available_locales(cfg: &Config) -> Vec<String> {
-    let mut found: Vec<String> = Vec::new();
-    for pattern in &cfg.data.read {
-        if !pattern.contains("%{locale}") {
-            continue;
-        }
-        let Some(re) = locale_pattern_re(pattern) else {
-            continue;
-        };
-        for path in glob_paths(&cfg.root, &interpolate_locale(pattern, "*")) {
-            let rel = path
-                .strip_prefix(&cfg.root)
-                .unwrap_or(&path)
-                .to_string_lossy()
-                .replace('\\', "/");
-            if let Some(locale) = extract_locale(&re, &rel)
-                && !found.contains(&locale)
-            {
-                found.push(locale);
-            }
-        }
-    }
-    found
-}
-
-/// The read pattern as an anchored regex whose one group is the locale.
-///
-/// ref: file_system_base.rb:122-124. The glob is deliberately more permissive
-/// than this regex: `config/locales/%{locale}.yml` globs to
-/// `config/locales/*.yml`, which matches `other.fr.yml`, but `%{locale}`
-/// becomes `([^/.]+)`, which a dotted name cannot satisfy. So that file names
-/// no locale. Only `.`, `/` and `\` are escaped, exactly as the gem escapes
-/// them; a read pattern holding another regex metacharacter fails to compile
-/// and is skipped, where the gem would raise.
-fn locale_pattern_re(pattern: &str) -> Option<Regex> {
-    let mut out = String::with_capacity(pattern.len() * 2);
-    out.push_str("\\A");
-    let bytes = pattern.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        if pattern[i..].starts_with("%{locale}") {
-            out.push_str("([^/.]+)");
-            i += "%{locale}".len();
-            continue;
-        }
-        if bytes[i] == b'*' {
-            let start = i;
-            while i < bytes.len() && bytes[i] == b'*' {
-                i += 1;
-            }
-            // Exactly `**` crosses directories, any other run does not.
-            out.push_str(if i - start == 2 { ".*" } else { "[^/]*?" });
-            continue;
-        }
-        // See `interpolate_locale`: the `else` arm restates the loop condition.
-        let Some(ch) = pattern[i..].chars().next() else {
-            break;
-        };
-        match ch {
-            '.' | '/' | '\\' => {
-                out.push('\\');
-                out.push(ch);
-            }
-            _ => out.push(ch),
-        }
-        i += ch.len_utf8();
-    }
-    out.push_str("\\z");
-    Regex::new(&out).ok()
-}
-
-/// The locale a concrete path names under a `data.read` pattern, or `None`
-/// when the pattern does not read that path at all.
-///
-/// Exposed so `init-config` can check the patterns it generates with the rule
-/// the loader will apply to them, rather than with a second implementation of
-/// it. `path` is project-relative and slash-separated.
-pub fn locale_for_path(pattern: &str, path: &str) -> Option<String> {
-    extract_locale(&locale_pattern_re(pattern)?, path)
-}
-
-/// Reads the locale back out of a concrete path.
-fn extract_locale(re: &Regex, path: &str) -> Option<String> {
-    Some(re.captures(path)?.get(1)?.as_str().to_string())
-}
-
 /// ref: lib/i18n/tasks/data/file_system_base.rb#read_locale
 fn read_locale(
     cfg: &Config,
@@ -623,79 +545,6 @@ fn is_symbol_reference(value: &str) -> bool {
         && rest
             .chars()
             .all(|c| c.is_alphanumeric() || c == '_' || c == '.')
-}
-
-/// Expands a glob relative to `root`. Only `*` and `**` are supported, which is
-/// all the gem's `Dir.glob` patterns use.
-fn glob_paths(root: &Path, pattern: &str) -> Vec<PathBuf> {
-    let pattern = pattern.replace('\\', "/");
-    let parts: Vec<&str> = pattern.split('/').filter(|p| !p.is_empty()).collect();
-    let mut current = vec![root.to_path_buf()];
-    for (i, part) in parts.iter().enumerate() {
-        let last = i + 1 == parts.len();
-        let mut next = Vec::new();
-        if *part == "**" {
-            for dir in &current {
-                collect_dirs(dir, &mut next);
-            }
-        } else if part.contains('*') {
-            let glob = globset::Glob::new(part).ok().map(|g| g.compile_matcher());
-            for dir in &current {
-                let Ok(entries) = std::fs::read_dir(dir) else {
-                    continue;
-                };
-                for e in entries.filter_map(Result::ok) {
-                    let name = e.file_name();
-                    let name = name.to_string_lossy();
-                    if !glob.as_ref().is_some_and(|g| g.is_match(name.as_ref())) {
-                        continue;
-                    }
-                    let p = e.path();
-                    if fits_segment(&p, last) {
-                        next.push(p);
-                    }
-                }
-            }
-        } else {
-            for dir in &current {
-                let p = dir.join(part);
-                if fits_segment(&p, last) {
-                    next.push(p);
-                }
-            }
-        }
-        current = next;
-        if current.is_empty() {
-            break;
-        }
-    }
-    current.sort();
-    current.dedup();
-    current
-}
-
-/// `dir` and every directory under it, which is what `**` expands to.
-fn collect_dirs(dir: &Path, out: &mut Vec<PathBuf>) {
-    out.push(dir.to_path_buf());
-    walk(dir, &mut |path, is_dir| {
-        if !is_dir {
-            return Descend::No;
-        }
-        out.push(path.to_path_buf());
-        Descend::Yes
-    });
-}
-
-/// Whether an expanded path can stand for one segment of the pattern.
-///
-/// Only the last segment names a locale file; every earlier one has to be a
-/// directory for the next segment to be joined onto it.
-fn fits_segment(path: &Path, is_last: bool) -> bool {
-    if is_last {
-        path.is_file()
-    } else {
-        path.is_dir()
-    }
 }
 
 #[cfg(test)]
@@ -891,127 +740,6 @@ mod tests {
             normalize_locale_list(&["fr".into(), "de".into(), "en".into()], "de"),
             vec!["de", "en", "fr"]
         );
-    }
-
-    /// See `config::interpolate_locale`: the same byte-scan loop, so the same
-    /// invariant. A multi-byte directory name must not be cut in half, and it
-    /// must not swallow the group either.
-    #[test]
-    fn a_multi_byte_read_pattern_still_names_the_locale() {
-        assert_eq!(
-            locale_of("config/переводы/%{locale}.yml", "config/переводы/ru.yml"),
-            Some("ru".to_string())
-        );
-        assert_eq!(
-            locale_of("config/переводы/%{locale}.yml", "config/x/ru.yml"),
-            None
-        );
-    }
-
-    fn locale_of(pattern: &str, path: &str) -> Option<String> {
-        extract_locale(&locale_pattern_re(pattern).expect("pattern compiles"), path)
-    }
-
-    /// ref: spec/file_system_data_spec.rb `#available_locales`. The three read
-    /// patterns there see three different sets of the same three files, and the
-    /// whole difference is in what the anchored regex accepts.
-    #[test]
-    fn the_read_pattern_decides_which_files_name_a_locale() {
-        let files = [
-            "config/locales/en.yml",
-            "config/locales/es.yml",
-            "config/locales/other.fr.yml",
-        ];
-        let names = |pattern: &str| -> Vec<String> {
-            files.iter().filter_map(|f| locale_of(pattern, f)).collect()
-        };
-        // "default pattern" -> en, es. `other.fr` holds a dot, and `([^/.]+)`
-        // cannot match it, even though the `*.yml` glob reached the file.
-        assert_eq!(names("config/locales/%{locale}.yml"), vec!["en", "es"]);
-        // "more inclusive pattern" -> en, es, fr.
-        assert_eq!(
-            names("config/locales/*%{locale}.yml"),
-            vec!["en", "es", "fr"]
-        );
-        // "another pattern" -> fr only.
-        assert_eq!(names("config/locales/*.%{locale}.yml"), vec!["fr"]);
-    }
-
-    #[test]
-    fn extracts_locale_from_path() {
-        assert_eq!(
-            locale_of(
-                "config/locales/base.%{locale}.yml",
-                "config/locales/base.de.yml"
-            ),
-            Some("de".into())
-        );
-        assert_eq!(
-            locale_of(
-                "config/locales/*.%{locale}.yml",
-                "config/locales/jobs.fr.yml"
-            ),
-            Some("fr".into())
-        );
-        assert_eq!(
-            locale_of("config/locales/%{locale}.yml", "config/locales/de.yml"),
-            Some("de".into())
-        );
-        // `**` crosses directories, a single `*` does not.
-        assert_eq!(
-            locale_of(
-                "config/locales/**/%{locale}.yml",
-                "config/locales/a/b/de.yml"
-            ),
-            Some("de".into())
-        );
-        assert_eq!(
-            locale_of(
-                "config/locales/*/%{locale}.yml",
-                "config/locales/a/b/de.yml"
-            ),
-            None
-        );
-        // A locale segment inside the path, not in the file name.
-        assert_eq!(
-            locale_of(
-                "config/locales/%{locale}/models.yml",
-                "config/locales/de/models.yml"
-            ),
-            Some("de".into())
-        );
-    }
-
-    #[test]
-    fn extract_locale_rejects_what_cannot_be_a_locale() {
-        // The extension has to match.
-        assert_eq!(
-            locale_of("config/locales/%{locale}.yml", "config/locales/de.json"),
-            None
-        );
-        // The literal part of the pattern has to be there.
-        assert_eq!(
-            locale_of("config/locales/%{locale}.yml", "other/de.yml"),
-            None
-        );
-        // `+` needs at least one character.
-        assert_eq!(
-            locale_of("config/locales/%{locale}.yml", "config/locales/.yml"),
-            None
-        );
-        // Nothing may follow the pattern.
-        assert_eq!(
-            locale_of("config/locales/%{locale}.yml", "config/locales/de.yml.bak"),
-            None
-        );
-    }
-
-    /// A read pattern the gem's escaping cannot express as a regex is skipped
-    /// rather than crashing the locale scan.
-    #[test]
-    fn an_uncompilable_read_pattern_is_skipped() {
-        assert!(locale_pattern_re("config/locales/%{locale}.yml").is_some());
-        assert!(locale_pattern_re("config/locales/[%{locale}.yml").is_none());
     }
 
     /// The `Value` display forms feed the `Base value` column of the reports,
