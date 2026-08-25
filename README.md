@@ -52,35 +52,44 @@ Library uses some "tricks" - like early files _discovery_ to skip work when it's
 
 ## How to migrate
 1. Grab binary from the [releases page](https://github.com/rwojsznis/i18n-tasks-rs/releases) (nowadays [I recommend using mise](https://mise.jdx.dev/dev-tools/backends/github.html) for local env)
-2. Try to migrate your config with `i18n-tasks-rs migrate-config`; when actually migrate it with `--write`
+2. Preview the migrated config with `i18n-tasks-rs migrate-config`, then add `--write` to save it
 3. Run `i18n-tasks-rs normalize` -- check if it looks good - then do same command with `--write` switch
-4. Run `i18n-takss-rs health` - you most likely will need to adapt few things, you can try to just paste the output into your _agent_.
+4. Run `i18n-tasks-rs health` - you most likely will need to adapt few things, you can try to just paste the output into your _agent_.
 5. Once you're happy with results you can replace `i18n-tasks` calls with `i18n-tasks-rs`
 6. Enjoy those previous saved seconds.
 
 ## How to start?
 
 1. Grab binary as above
-2. `i18n-tasks-rs init config`
-3. For all the rest `i18n-tasks-rs help`
+2. Run `i18n-tasks-rs init-config` to inspect the generated config, then add `--write` to save it
+3. Run `i18n-tasks-rs --help` or `i18n-tasks-rs <command> --help` for the remaining options
 
 ## Commands
 
 ```bash
 i18n-tasks-rs missing   [-l LOCALES] [locale ...] [--types used,diff,plural]
 i18n-tasks-rs unused    [-l LOCALES] [locale ...]
+i18n-tasks-rs remove-unused [-l LOCALES] [locale ...] [-p/--pattern PATTERN]
+                            [-k/--keep-order] [--write | --dry-run]
+                            [--allow-delete] [--allow-opaque]
 i18n-tasks-rs eq-base   [-l LOCALES] [locale ...]
 i18n-tasks-rs check-consistent-interpolations [-l LOCALES] [locale ...]
 i18n-tasks-rs check-reserved-interpolations   [-l LOCALES] [locale ...]
 i18n-tasks-rs check-normalized [-l LOCALES] [locale ...]
 i18n-tasks-rs normalize [-l LOCALES] [locale ...] [-p/--pattern-router]
                                      [--write | --dry-run] [--allow-delete]
+i18n-tasks-rs clean-config [-l LOCALES] [locale ...] [--write]
 i18n-tasks-rs health    [-l LOCALES] [locale ...]
 i18n-tasks-rs find      [-l LOCALES] [locale ...]
-i18n-tasks-rs init-config    [-o/--to PATH] [--write] [--force]
+i18n-tasks-rs init-config    [-o/--to PATH] [--root PATH] [--write] [--force]
 i18n-tasks-rs migrate-config [-i/--from PATH] [-o/--to PATH]
-                             [--write] [--force]
+                             [--root PATH] [--write] [--force]
 ```
+
+Project-reading commands also accept `-c/--config PATH`, `-f/--format
+text|json`, `--root PATH`, and `-j/--jobs N`. `remove-unused`, `normalize`, and
+`clean-config` do not write unless `--write` is present. Use each command's
+`--help` output as the complete option reference.
 
 ## Config syntax
 
