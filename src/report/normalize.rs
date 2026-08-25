@@ -15,7 +15,7 @@ use crate::data::load::Store;
 use crate::data::route;
 use crate::session::Session;
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -187,7 +187,7 @@ pub fn plan_filtered(
         let tree = store
             .tree(locale)
             .ok_or_else(|| format!("locale `{locale}` has no data"))?;
-        let mut written: Vec<PathBuf> = Vec::new();
+        let mut written: BTreeSet<PathBuf> = BTreeSet::new();
 
         for dest in &destinations {
             files_routed += 1;
@@ -214,7 +214,7 @@ pub fn plan_filtered(
                 out.sort();
             }
             let after = emit_locale(locale, &out);
-            written.push(dest.path.clone());
+            written.insert(dest.path.clone());
 
             let before = std::fs::read_to_string(&dest.path).unwrap_or_default();
             let exists = dest.path.is_file();

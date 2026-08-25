@@ -673,6 +673,11 @@ and writes nothing unless `--write` is present. `--dry-run` prints a unified
 diff. If the plan empties a file, `--allow-delete` is also required. There is no
 interactive prompt, `--confirm`, or `CONFIRM` bypass.
 
+If the scan finds an opaque call such as `t(variable)`, `--write` is refused
+until the call is covered by an `i18n-tasks-use` comment or `ignore_unused`
+rule. `--allow-opaque` is the explicit override. The gem prints no such warning
+and can delete a key reached through that call.
+
 The selected key set otherwise follows the gem: locale selection and ignore
 rules apply first, then `--pattern` filters the collapsed unused tree. The
 default rewrite sorts retained keys, and `-k` or `--keep-order` preserves their
@@ -681,3 +686,10 @@ order. A no-match pattern is a no-op and does not normalize the files.
 Writes use the same atomic replacement path as `normalize` (difference 30).
 Retained keys use the conservative router, so removal does not move them to a
 new `data.write` destination.
+
+One plural edge stays safer than the gem. If one plural child is ignored or
+external and another is unused, the gem collapses the partial unused tree to
+the parent and removes the complete plural node, including the protected child.
+This tool collapses only when every child in the locale data is unused, so it
+removes only the unused child. A parent `--pattern` still selects the unused
+descendants, but never expands the removal set to protected data.

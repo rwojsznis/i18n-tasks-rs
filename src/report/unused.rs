@@ -10,7 +10,7 @@ use crate::plural::depluralize_key;
 use crate::scan::Occurrence;
 use crate::used::UsedKeys;
 use serde::Serialize;
-use std::collections::BTreeSet;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Serialize)]
 pub struct UnusedReport {
@@ -19,14 +19,14 @@ pub struct UnusedReport {
     pub opaque: Vec<Occurrence>,
     /// Exact leaves before plural nodes are collapsed for display.
     #[serde(skip)]
-    removable: BTreeSet<(String, String)>,
+    removable: HashMap<String, HashSet<String>>,
 }
 
 pub fn report(cfg: &Config, store: &Store, used: &UsedKeys, locales: &[String]) -> UnusedReport {
     let base = store.tree(&store.base_locale);
     let ignore = cfg.ignore_patterns(IgnoreType::Unused, None);
     let mut rows = Vec::new();
-    let mut removable = BTreeSet::new();
+    let mut removable: HashMap<String, HashSet<String>> = HashMap::new();
     for locale in locales {
         let Some(tree) = store.tree(locale) else {
             continue;
@@ -52,7 +52,10 @@ pub fn report(cfg: &Config, store: &Store, used: &UsedKeys, locales: &[String]) 
                 continue;
             }
             hits.push(key);
-            removable.insert((locale.clone(), key.to_string()));
+            removable
+                .entry(locale.clone())
+                .or_default()
+                .insert(key.to_string());
         }
         for key in collapse_plural_nodes(tree, hits) {
             let value = tree.get(&key).map(|l| l.value.to_display_string());
@@ -108,32 +111,57 @@ impl UnusedReport {
         UnusedReport {
             rows: Vec::new(),
             opaque: Vec::new(),
-            removable: BTreeSet::new(),
+            removable: HashMap::new(),
         }
     }
 
     /// Applies `remove-unused --pattern` after plural rows are collapsed, as
     /// the gem does with `unused_keys.select_keys`.
     pub fn select_pattern(&mut self, pattern: &Pattern) {
-        self.rows.retain(|row| pattern.is_match(&row.key));
-        self.removable.retain(|(locale, key)| {
-            self.rows.iter().any(|row| {
-                row.locale == *locale
-                    && (row.key == *key
-                        || key
-                            .strip_prefix(&row.key)
-                            .is_some_and(|rest| rest.starts_with('.')))
-            })
+        self.rows.retain(|row| {
+            let mut candidate = Some(row.key.as_str());
+            while let Some(value) = candidate {
+                if pattern.is_match(value) {
+                    return true;
+                }
+                candidate = crate::keys::parent_key(value);
+            }
+            false
+        });
+        let selected: HashMap<&str, HashSet<&str>> =
+            self.rows.iter().fold(HashMap::new(), |mut selected, row| {
+                selected
+                    .entry(row.locale.as_str())
+                    .or_default()
+                    .insert(row.key.as_str());
+                selected
+            });
+        self.removable.retain(|locale, keys| {
+            let Some(rows) = selected.get(locale.as_str()) else {
+                return false;
+            };
+            keys.retain(|key| {
+                let mut candidate = Some(key.as_str());
+                while let Some(value) = candidate {
+                    if rows.contains(value) {
+                        return true;
+                    }
+                    candidate = crate::keys::parent_key(value);
+                }
+                false
+            });
+            !keys.is_empty()
         });
     }
 
     pub fn has_removable(&self) -> bool {
-        !self.removable.is_empty()
+        self.removable.values().any(|keys| !keys.is_empty())
     }
 
     pub fn removable(&self, locale: &str, key: &str) -> bool {
         self.removable
-            .contains(&(locale.to_string(), key.to_string()))
+            .get(locale)
+            .is_some_and(|keys| keys.contains(key))
     }
 
     pub fn outcome(&self) -> Outcome {

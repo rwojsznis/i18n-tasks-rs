@@ -43,7 +43,7 @@ Library uses some "tricks" - like early files _discovery_ to skip work when it's
 
 ## What works
 - `erb`, `haml`, `slim`, `js`, `tsx`, `jsx` (and more via regexp) scanning
--  `missing` / `unused` / `check-consistent-interpolations` / `check-reserved-interpolations` / `check-normalized` (+ `health` which wraps all commands), `eq-base`
+-  `missing` / `unused` / `check-consistent-interpolations` / `check-reserved-interpolations` / `check-normalized` (+ `health` which wraps all commands), `eq-base`, `remove-unused`
 - `normalize` - yet it will yield slightly different yaml format than gem! also see `--pattern-router` / `--allow-delete` switches
 - `# i18n-tasks-use` comment hints (might cause some quirks, feel feel free to report any issues)
 

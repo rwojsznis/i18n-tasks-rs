@@ -324,6 +324,9 @@ struct RemoveUnusedFlags {
     /// Allow deleting a file that ends up with no keys.
     #[arg(long)]
     allow_delete: bool,
+    /// Allow writes when calls with statically unknown keys were found.
+    #[arg(long)]
+    allow_opaque: bool,
 }
 
 /// `init-config`'s flags, plus the two defaults they resolve to.
@@ -765,25 +768,60 @@ fn remove_unused_command(s: &Session, flags: &RemoveUnusedFlags) -> Result<u8, S
             errln!("  {}", deletion.display);
         }
     }
-    if s.json {
-        outln!("{}", report.to_write_json(s, "remove_unused", flags.write)?);
-    } else {
+    if !s.json {
         out!("{}", unused.to_text());
         out!("{}", report.to_normalize_text(flags.dry_run));
     }
     if !flags.write {
-        if !s.json {
+        if s.json {
+            outln!("{}", remove_unused_json(s, &unused, &report, false)?);
+        } else {
             outln!("Nothing was written. Pass `--write` to apply, `--dry-run` to see the diff.");
         }
         return Ok(EXIT_OK);
     }
+    if !unused.opaque.is_empty() && !flags.allow_opaque {
+        if s.json {
+            outln!("{}", remove_unused_json(s, &unused, &report, false)?);
+        }
+        return Err(format!(
+            "refusing to remove keys while {} translation call(s) have an unknown key. \
+             Add `# i18n-tasks-use` or `ignore_unused` rules, or pass `--allow-opaque` \
+             after you verify the calls.",
+            unused.opaque.len()
+        ));
+    }
     if !deletions.is_empty() && !flags.allow_delete {
+        if s.json {
+            outln!("{}", remove_unused_json(s, &unused, &report, false)?);
+        }
         return Err(
             "refusing to delete the files listed above. Pass `--allow-delete` to allow it.".into(),
         );
     }
     normalize::apply(&report)?;
+    if s.json {
+        outln!("{}", remove_unused_json(s, &unused, &report, true)?);
+    }
     Ok(EXIT_OK)
+}
+
+fn remove_unused_json(
+    s: &Session,
+    unused: &unused::UnusedReport,
+    report: &normalize::NormalizeReport,
+    written: bool,
+) -> Result<String, String> {
+    serde_json::to_string_pretty(&serde_json::json!({
+        "check": "remove_unused",
+        "written": written,
+        "config_digest": s.cfg.digest,
+        "locales": s.locales,
+        "unused": unused,
+        "changes": report.changes,
+        "files_routed": report.files_routed,
+    }))
+    .map_err(|e| e.to_string())
 }
 
 /// Dumps every used-key occurrence. Exists for diffing this tool against the
