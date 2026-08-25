@@ -21,7 +21,8 @@ pub(super) struct Stripped {
 /// `<% require ... %>` prelude and its kind. A line that mixed ERB into a YAML
 /// value cannot be migrated at all, because the value was computed by code, so
 /// it is dropped and reported for a human. Comments are left alone unless they
-/// contain `<%`, which [`Config::parse`] rejects wherever it appears.
+/// contain `<%`, which [`Config::parse`](crate::config::Config::parse) rejects
+/// wherever it appears.
 ///
 /// Blanked lines keep their place in the file so that every line number in
 /// every message still refers to the original.

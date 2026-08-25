@@ -56,8 +56,8 @@ enum Style {
 /// * **Q1** the empty string, which has no plain form;
 /// * **Q2** the value opens with a character that is not a word character and
 ///   holds no `"`. The YAML grammar needs only part of this: no plain scalar
-///   may open with an indicator (`- ? : , [ ] { } # & * ! | > ' " % @ \``) or a
-///   space, which is why `indicator_start` is checked on its own. The rest of
+///   may open with an indicator (`` - ? : , [ ] { } # & * ! | > ' " % @ ` ``) or
+///   a space, which is why `indicator_start` is checked on its own. The rest of
 ///   it — every other non-word character, and the `"` exception — is Psych's
 ///   rule copied verbatim (`o =~ /^[^[:word:]][^"]*$/` in
 ///   `Psych::Visitors::YAMLTree#visit_String`). Copying it keeps the output
