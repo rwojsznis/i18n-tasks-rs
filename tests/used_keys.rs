@@ -204,8 +204,8 @@ fn occurrence_positions_are_correct() {
     assert_eq!(occ.raw_key, "a.b");
 }
 
-/// The extension picks the scanner. ref: used_keys.rb:22-26.
-/// `tests/erb_keys.rs` and `tests/template_keys.rs` cover the two new scanners.
+/// The extension picks the scanner. ref: used_keys.rb:22-26. The other two
+/// scanners are covered by `tests/erb_keys.rs` and `tests/template_keys.rs`.
 #[test]
 fn the_extension_picks_the_scanner() {
     let erb = scan_file(

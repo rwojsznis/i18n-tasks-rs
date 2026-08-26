@@ -30,19 +30,22 @@ compared over the same project.
 |---|---|
 | `src/config.rs` | the plain-YAML config (no ERB, no code execution — blocker B3) |
 | `src/init/` | `init-config`: detect, render, verify |
-| `src/migrate/` | `migrate-config`: ERB, per-key decisions, render |
+| `src/migrate/` | `migrate-config`: ERB, per-key decisions, render, over line ranges |
 | `src/pattern.rs` | the key-pattern DSL as a segment matcher (B2) |
 | `src/walk.rs` | the one directory walk; the callers pass the prune rule |
 | `src/discover.rs` | glob filters over the walk + aho-corasick prefilter |
 | `src/scan/ruby/` | the Prism visitor — the core; key, args, magic, nodes |
 | `src/scan/erb.rs` | ERB tags → one Ruby buffer per file, plus a source map |
-| `src/scan/template.rs` | Slim, JS, TS and everything else, by regex |
+| `src/scan/template.rs` | Haml, Slim, JS, TS and everything else, by regex |
+| `src/used.rs` | the used-key set, scanned once for every locale (decision 2) |
+| `src/yaml.rs` | the YAML reader; an anchor, alias or Symbol is an error (B4) |
 | `src/data/` | YAML load, the hand-written emitter (B1), the two routers |
-| `src/report/` | `unused`, `missing`, interpolation checks, `normalize`, `find` |
+| `src/report/` | `unused`, `missing`, `eq-base`, interpolations, `normalize`, `find` |
+| `src/clean_config.rs` | `clean-config`: ignore rules that suppress nothing |
 | `src/session.rs` | the config, the data and the resolved locale list, loaded once |
 | `src/check.rs` | the CLI's name per check, and the two `-f json` envelopes |
 | `src/main.rs` | clap only: the flags, the printing macros, one fn per command |
-| `tests/` | integration tests; `tests/fixtures/` holds the gem's own fixtures |
+| `tests/` | integration tests; `fixtures/` from the gem, `golden/` for the emitter |
 | `docs/` | design notes and accepted diffs |
 
 Unit tests live in `#[cfg(test)] mod tests` next to the code; cross-cutting and
@@ -100,6 +103,8 @@ the scope quietly.
 - The per-file scan stays a pure `fn(&[u8], &Path) -> FileScan`.
 - Exit codes: **0** check passed, **1** check found something, **2** the tool
   itself failed.
+- Write in-code comments that describe why code or a class does what it does,
+  but not what it does. The "what" should be self-evident. Be concise and direct.
 
 ## Gotchas
 

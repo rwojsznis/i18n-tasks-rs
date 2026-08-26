@@ -1,8 +1,7 @@
 //! The used-key set, scanned once for every locale.
 //!
 //! Design decision 2 in `docs/design-notes.md`: the used-key set does not
-//! depend on the
-//! locale, but the gem recomputes `used_tree` per locale
+//! depend on the locale, but the gem recomputes `used_tree` per locale
 //! (`unused_keys.rb:16`, `missing_keys.rb:111`), about 37% of `unused`, and
 //! parses the whole source tree twice, strict and non-strict
 //! (`used_keys.rb:143`), a further 22%.
@@ -36,8 +35,8 @@ enum Verdict {
     Scanned(FileScan),
     /// Held none of the needles, so it cannot hold a translation call.
     Prefiltered,
-    /// Could not be read. Counted as neither scanned nor prefiltered, which is
-    /// what the two-pass version did with it.
+    /// Could not be read, so it is no evidence either way and is counted as
+    /// neither scanned nor prefiltered.
     Unreadable,
 }
 

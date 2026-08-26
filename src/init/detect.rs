@@ -82,7 +82,7 @@ pub struct Detected {
     /// The locale directory, relative to the root, or `None` when none held
     /// any data.
     pub locale_dir: Option<String>,
-    /// Locale files found under it, relative to the root.
+    /// How many locale files were found under it.
     pub files_seen: usize,
     /// Files no emitted pattern reads. Always empty in a clean detection.
     pub unmatched: Vec<String>,

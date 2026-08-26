@@ -4,9 +4,9 @@
 //! ref: lib/i18n/tasks/data/adapter/yaml_adapter.rb
 //!
 //! Design decision 1 in `docs/design-notes.md`: a flat key map, not a node
-//! tree. The gem's
-//! `select_nodes` deep-copies every matching node through `node.derive`
-//! (`data/tree/traversal.rb:93-128`), which is 2.04 s of a 5.5 s `unused` run.
+//! tree. The gem's `select_nodes` deep-copies every matching node through
+//! `node.derive` (`data/tree/traversal.rb:93-128`), which is 2.04 s of a
+//! 5.5 s `unused` run.
 //!
 //! This module holds the locale trees and the read itself. The two questions
 //! that come before it are next door: `glob` turns a pattern into the paths
@@ -112,9 +112,9 @@ impl Leaf {
     }
 }
 
-// Sibling examinations made while recording each key's parent-child pairs.
-// H21: the pairs are deduplicated, and the deduplication must not scan the
-// siblings already recorded.
+// Sibling examinations made while recording each key's parent-child pairs. The
+// pairs are deduplicated, and the deduplication must not scan the siblings
+// already recorded.
 #[cfg(test)]
 thread_local! {
     static SIBLINGS_EXAMINED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
@@ -395,7 +395,7 @@ fn read_locale(
                     .filter_map(|(k, _)| k.as_str().map(str::to_string))
                     .collect(),
             );
-            // Each file maps locale to data. Only the locale being read is kept.
+            // Each file maps locale to data, and one file may hold several.
             for (k, v) in entries {
                 if k.as_str() != Some(locale) {
                     continue;
@@ -660,10 +660,10 @@ mod tests {
         }
     }
 
-    /// H21: recording a key's ancestors must not cost one comparison per
-    /// sibling already recorded. A few thousand keys under one parent is an
-    /// ordinary locale file, and a linear scan makes `finish` quadratic — and
-    /// `finish` runs inside `Store::load`, so every command pays it.
+    /// Recording a key's ancestors must not cost one comparison per sibling
+    /// already recorded. A few thousand keys under one parent is an ordinary
+    /// locale file, and a linear scan makes `finish` quadratic — and `finish`
+    /// runs inside `Store::load`, so every command pays it.
     #[test]
     fn recording_a_child_does_not_scan_the_children_before_it() {
         const N: usize = 500;
@@ -789,7 +789,8 @@ mod tests {
             normalize_locale_list(&["fr".into(), "de".into()], "en"),
             vec!["en", "de", "fr"]
         );
-        // Duplicates collapse.
+        // The base is prepended, so a base entry in the list is dropped rather
+        // than repeated.
         assert_eq!(
             normalize_locale_list(&["en".into(), "en".into(), "de".into()], "en"),
             vec!["en", "de"]

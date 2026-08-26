@@ -1,9 +1,10 @@
 //! The regex scanner over Haml, Slim and JS, driven by the gem's own fixtures.
 //!
 //! Ported from spec/used_keys_haml_spec.rb, spec/used_keys_slim_spec.rb,
-//! spec/pattern_scanner_spec.rb and spec/pattern_with_scope_scanner_spec.rb. The unit tests in
-//! `src/scan/template.rs` cover those two scanner specs case by case; this file
-//! covers whole fixture files, which is what the differential harness compares.
+//! spec/pattern_scanner_spec.rb and spec/pattern_with_scope_scanner_spec.rb.
+//! The unit tests in `src/scan/template.rs` cover those two scanner specs case
+//! by case; this file covers whole fixture files, which is what the
+//! differential harness compares.
 
 use i18n_tasks_rs::scan::{FileScan, ScanConfig, scan_file};
 use std::path::Path;

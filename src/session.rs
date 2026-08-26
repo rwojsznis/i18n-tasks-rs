@@ -111,7 +111,8 @@ pub fn resolve_locales(requested: &[String], store: &Store) -> Result<Vec<String
     locales.retain(|locale| seen.insert(locale.clone()));
     for l in &locales {
         // ref: Locale::Validator::VALID_LOCALE_RE. Reported before the
-        // membership check so a typo like `-l en,` names the real problem.
+        // membership check so a malformed name like `-l -de` names the real
+        // problem rather than being listed as unconfigured.
         if !valid_locale(l) {
             return Err(format!("invalid locale `{l}`"));
         }

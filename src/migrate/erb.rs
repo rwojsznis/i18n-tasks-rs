@@ -1,9 +1,7 @@
 //! Removing the ERB.
 //!
-//! Blocker B3: the gem evaluates its config as ERB and then as Ruby, so a real
-//! config can `require` a scanner, shell out, or boot Rails. Nothing here
-//! evaluates anything. A tag is cut out, and a line whose *value* was computed
-//! by one is reported for a human instead.
+//! Blocker B3: nothing here evaluates anything. A tag is cut out, and a line
+//! whose *value* was computed by one is reported for a human instead.
 
 use super::Manual;
 use super::lines::is_comment;

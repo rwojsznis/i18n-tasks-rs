@@ -305,15 +305,12 @@ fn the_missing_config_error_points_at_init() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
-/// The three directory walks in this crate disagreed about symlinks: the one in
-/// `init` skipped every one of them, while the glob expansion in `data::load`
-/// follows them, because `Path::is_file` does. So a symlinked locale file was
+/// Detection and the loader have to agree about symlinks. The glob expansion in
+/// `data::load` follows a symlinked file, because `Path::is_file` does, and so
+/// does `Dir.glob` in the gem. A walk that skipped links instead made the file
 /// invisible to detection — its locale absent from the generated `locales:`,
-/// and the file absent from `files_seen` — although the loader reads it as
-/// happily as any other file once a pattern names it.
-///
-/// `Dir.glob` in the gem follows a symlinked file too, so this is the walk
-/// that was wrong.
+/// and the file absent from `files_seen` — while the loader read it as happily
+/// as any other file once a pattern named it.
 #[cfg(unix)]
 #[test]
 fn a_symlinked_locale_file_is_detected_like_a_real_one() {
@@ -330,8 +327,8 @@ fn a_symlinked_locale_file_is_detected_like_a_real_one() {
     assert_eq!(g.detected.files_seen, 2);
     assert_eq!(g.detected.locales, ["de", "en"]);
 
-    // And the generated config reads both, which is the disagreement: the
-    // loader was always able to follow the link.
+    // And the generated config reads both, which is the property that matters:
+    // detection sees exactly what the loader will read.
     let cfg = Config::parse(&g.output, Path::new(TARGET), s.root.clone()).expect("output loads");
     let store = Store::load(&cfg).expect("data loads");
     assert!(store.key_value("de", "a"), "de.a");

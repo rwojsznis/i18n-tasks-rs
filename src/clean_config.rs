@@ -252,6 +252,11 @@ fn collect_rules(
     }
 }
 
+/// Drops the given lines, and the comment block directly above each one.
+///
+/// A comment at the rule's own indent documents that rule, the same convention
+/// `migrate::lines` follows, so leaving it behind would strand a note about a
+/// pattern that is no longer there.
 fn remove_lines(source: &str, stale_lines: &BTreeSet<usize>) -> String {
     let lines: Vec<&str> = source.split_inclusive('\n').collect();
     let mut remove = stale_lines.clone();

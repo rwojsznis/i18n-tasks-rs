@@ -1,9 +1,8 @@
 //! Which lines of the source each config entry owns.
 //!
-//! The output is produced by slicing the original lines, not by re-serializing
-//! a parsed tree, so comments, quoting and list formatting all survive. This
-//! module answers the one question that makes that possible: where does an
-//! entry start and end.
+//! The migration slices the original lines rather than re-serializing a parsed
+//! tree, and this module answers the one question that makes that possible:
+//! where does an entry start and end.
 
 /// The line range one config entry owns.
 #[derive(Debug, Clone, Copy)]

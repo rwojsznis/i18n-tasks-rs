@@ -31,10 +31,7 @@ pub(super) fn render(d: &Detected, verified: Option<&Verification>) -> String {
         None => out.push_str("#   no locale directory\n"),
     }
     match &d.base_locale_from {
-        Some(at) => out.push_str(&format!(
-            "#   base_locale {} from {at}\n",
-            d.base_locale, // the assignment the project already makes
-        )),
+        Some(at) => out.push_str(&format!("#   base_locale {} from {at}\n", d.base_locale)),
         None => out.push_str(&format!(
             "#   base_locale {}, assumed: the project's Ruby names no default_locale\n",
             d.base_locale
@@ -223,9 +220,6 @@ pub fn to_text(g: &Generated, to: &Path, written: bool) -> String {
 mod tests {
     use super::*;
 
-    /// Every generated path starts with the locale directory, so none of them
-    /// needs quoting. The rule is here for the one that would: a `data.read`
-    /// beginning with `*` is a YAML alias.
     /// A note is the only free text in the generated file, so the wrap is the
     /// only thing keeping the header inside 80 columns. Every line has to stay
     /// a comment, too: a wrapped line that lost its `#` is a config the tool
@@ -256,6 +250,9 @@ mod tests {
         assert_eq!(wrap_comment("short enough"), "#   short enough\n");
     }
 
+    /// Every generated path starts with the locale directory, so none of them
+    /// needs quoting. The rule is here for the one that would: a `data.read`
+    /// beginning with `*` is a YAML alias.
     #[test]
     fn a_path_is_quoted_only_when_yaml_needs_it() {
         for plain in [

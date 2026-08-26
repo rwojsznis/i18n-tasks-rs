@@ -271,9 +271,9 @@ mod tests {
         Value::Str(v.into())
     }
 
-    /// H17: a lookup must not cost one comparison per sibling already there.
-    /// A locale file with a few thousand keys under one parent is ordinary, and
-    /// a linear scan makes that quadratic.
+    /// A lookup must not cost one comparison per sibling already there. A
+    /// locale file with a few thousand keys under one parent is ordinary, and a
+    /// linear scan makes that quadratic.
     #[test]
     fn inserting_a_sibling_does_not_scan_the_siblings_before_it() {
         const N: usize = 500;

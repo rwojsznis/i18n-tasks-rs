@@ -6,7 +6,7 @@
 //! the file is an error, and so is any key the tool does not understand.
 //!
 //! Because of that a gem config cannot be reused as is. `migrate-config`
-//! converts one; see `src/migrate.rs`.
+//! converts one; see `src/migrate/`.
 
 use crate::pattern::PatternSet;
 use crate::yaml::{self, Node};

@@ -47,8 +47,9 @@ pedantic = { level = "warn", priority = -1 }
 # Cosmetic, and each one loses an argument with this codebase's style.
 doc_markdown = "allow"        # the gem's names are not Rust items
 must_use_candidate = "allow"  # nothing here is a builder
-# `write!` into a `String` cannot fail, so the alternative is an `unwrap` the
-# lint below would then complain about. The reports are built by pushing.
+# `write!` into a `String` cannot fail, so the alternative is an `unwrap` that
+# `clippy::unwrap_used` in `src/lib.rs` then forbids. The reports are built by
+# pushing.
 format_push_string = "allow"
 # clap needs one `bool` per flag, and every field is read by name.
 struct_excessive_bools = "allow"
@@ -58,5 +59,7 @@ single_match_else = "allow"
 # `init::detect`, `init::render` and `Config::parse` are long because each one
 # is a single list of cases. Splitting them would only move the list.
 too_many_lines = "allow"
-# Given blocker B3 and the write path.
+# Kept on, unlike the pedantic lints allowed above: a silently truncated offset
+# or length would corrupt a locale file, and `normalize --write` is the one code
+# path in the tool that destroys data.
 cast_possible_truncation = "warn"

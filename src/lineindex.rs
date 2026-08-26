@@ -5,10 +5,10 @@
 //! (`lib/i18n/tasks/scanners/occurrence_from_position.rb:20`), which is
 //! quadratic in the number of occurrences. One index per file replaces it.
 
-/// Line starts, packed as `u32`: two bytes per line beats eight, and no
-/// source file this scans is 4 GiB. A longer buffer saturates rather than
-/// wraps, so the offsets stay ordered and `locate` keeps answering the last
-/// line instead of some arbitrary earlier one.
+/// Line starts, packed as `u32`: four bytes per line beats a `usize`'s eight,
+/// and no source file this scans is 4 GiB. A longer buffer saturates rather
+/// than wraps, so the offsets stay ordered and `locate` keeps answering the
+/// last line instead of some arbitrary earlier one.
 #[derive(Debug)]
 pub struct LineIndex {
     /// Byte offset of the first character of each line. Always starts with 0.

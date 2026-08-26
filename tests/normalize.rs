@@ -2,8 +2,7 @@
 //! emitter, end to end.
 //!
 //! ref: blocker B1 in `docs/design-notes.md`. The correctness properties are
-//! value preservation
-//! and idempotence, not byte equality with Psych. See blocker B1.
+//! value preservation and idempotence, not byte equality with Psych.
 
 use i18n_tasks_rs::config::Config;
 use i18n_tasks_rs::data::load::{Store, Value};
@@ -746,7 +745,7 @@ fn a_destination_directory_that_cannot_be_created_is_an_error() {
     assert!(text.contains("cannot create"), "{text}");
 }
 
-/// H3. `apply` must write the path that `plan` chose, not a re-parse of the
+/// `apply` must write the path that `plan` chose, not a re-parse of the
 /// string the report prints. A destination component holding a `\` is legal on
 /// Unix, and `display_path` turns that byte into a separator.
 #[test]
@@ -768,8 +767,9 @@ fn a_destination_holding_a_backslash_is_written_where_it_was_planned() {
     );
 }
 
-/// H3, second half. A `data.write` path that leaves the root, and one that is
-/// absolute, both have to survive the trip from `plan` to `apply`.
+/// The other half of the same guarantee: a `data.write` path that leaves the
+/// root, and one that is absolute, both have to survive the trip from `plan`
+/// to `apply`.
 #[test]
 fn a_destination_outside_the_root_is_written_where_it_was_planned() {
     let p = Project::new("escape-root", SIMPLE);

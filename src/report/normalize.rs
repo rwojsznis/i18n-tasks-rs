@@ -252,8 +252,8 @@ pub fn plan_filtered(
         }
     }
 
-    // On the printed path, so the report order does not depend on how a
-    // destination outside the root spells itself.
+    // Ordered by the printed path, so the report order does not depend on how
+    // a destination outside the root spells itself.
     changes.sort_by(|a, b| a.display.cmp(&b.display));
     Ok(NormalizeReport {
         changes,

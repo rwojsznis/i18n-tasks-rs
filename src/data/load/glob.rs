@@ -7,8 +7,7 @@
 use crate::walk::{Descend, walk};
 use std::path::{Path, PathBuf};
 
-/// Expands a glob relative to `root`. Only `*` and `**` are supported, which is
-/// all the gem's `Dir.glob` patterns use.
+/// Expands a glob relative to `root`.
 pub(super) fn glob_paths(root: &Path, pattern: &str) -> Vec<PathBuf> {
     let pattern = pattern.replace('\\', "/");
     let parts: Vec<&str> = pattern.split('/').filter(|p| !p.is_empty()).collect();

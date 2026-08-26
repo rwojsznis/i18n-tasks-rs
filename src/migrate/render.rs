@@ -8,7 +8,6 @@ use super::Migration;
 use super::erb::redact_erb;
 use std::path::Path;
 
-/// The header explains itself to whoever opens the file in six months.
 pub(super) fn render(m: &Migration, blocks: &[String], from: &Path) -> String {
     let mut out = String::new();
     out.push_str("# i18n-tasks-rs configuration.\n#\n");
