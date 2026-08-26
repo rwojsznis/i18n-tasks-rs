@@ -106,6 +106,9 @@ pub fn resolve_locales(requested: &[String], store: &Store) -> Result<Vec<String
     {
         locales.swap(0, pos);
     }
+    // The gem merges per-locale forests, so repeated locale roots coalesce.
+    let mut seen = std::collections::HashSet::new();
+    locales.retain(|locale| seen.insert(locale.clone()));
     for l in &locales {
         // ref: Locale::Validator::VALID_LOCALE_RE. Reported before the
         // membership check so a typo like `-l en,` names the real problem.
@@ -173,6 +176,15 @@ mod tests {
         assert_eq!(
             resolve(&["de", "fr", "en"], &s),
             Ok(vec_of(&["en", "fr", "de"]))
+        );
+    }
+
+    #[test]
+    fn duplicate_locales_coalesce_like_merged_gem_forests() {
+        let s = store("en", &["en", "de"]);
+        assert_eq!(
+            resolve(&["de", "en", "de", "base"], &s),
+            Ok(vec_of(&["en", "de"]))
         );
     }
 

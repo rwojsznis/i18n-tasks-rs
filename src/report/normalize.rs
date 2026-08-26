@@ -15,7 +15,7 @@ use crate::data::load::Store;
 use crate::data::route;
 use crate::session::Session;
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -115,8 +115,22 @@ impl NormalizeReport {
     ///
     /// The plan does not serialize.
     pub fn to_normalize_json(&self, session: &Session, written: bool) -> Result<String, String> {
+        self.to_write_json(session, "normalize", written)
+    }
+
+    /// Serializes the write plan for a named command.
+    ///
+    /// # Errors
+    ///
+    /// The plan does not serialize.
+    pub fn to_write_json(
+        &self,
+        session: &Session,
+        command: &str,
+        written: bool,
+    ) -> Result<String, String> {
         serde_json::to_string_pretty(&serde_json::json!({
-            "check": "normalize",
+            "check": command,
             "written": written,
             "config_digest": session.cfg.digest,
             "locales": session.locales,
@@ -147,16 +161,33 @@ pub fn plan(
     locales: &[String],
     force_pattern: bool,
 ) -> Result<NormalizeReport, String> {
+    plan_filtered(cfg, store, locales, force_pattern, &|_, _| true)
+}
+
+/// Works out the destination files after rejected locale/key pairs are removed.
+///
+/// # Errors
+///
+/// A selected key cannot be routed, a locale has no data, or a write-safety
+/// guard fails. Nothing is written.
+pub fn plan_filtered(
+    cfg: &Config,
+    store: &Store,
+    locales: &[String],
+    force_pattern: bool,
+    keep: &impl Fn(&str, &str) -> bool,
+) -> Result<NormalizeReport, String> {
     let mut changes = Vec::new();
     let mut files_routed = 0usize;
     let mut claimed: HashMap<PathBuf, String> = HashMap::new();
 
     for locale in locales {
-        let destinations = route::route(cfg, store, locale, force_pattern)?;
+        let destinations =
+            route::route_filtered(cfg, store, locale, force_pattern, &|key| keep(locale, key))?;
         let tree = store
             .tree(locale)
             .ok_or_else(|| format!("locale `{locale}` has no data"))?;
-        let mut written: Vec<PathBuf> = Vec::new();
+        let mut written: BTreeSet<PathBuf> = BTreeSet::new();
 
         for dest in &destinations {
             files_routed += 1;
@@ -183,7 +214,7 @@ pub fn plan(
                 out.sort();
             }
             let after = emit_locale(locale, &out);
-            written.push(dest.path.clone());
+            written.insert(dest.path.clone());
 
             let before = std::fs::read_to_string(&dest.path).unwrap_or_default();
             let exists = dest.path.is_file();
@@ -209,6 +240,7 @@ pub fn plan(
             if written.contains(&path) {
                 continue;
             }
+            check_foreign_locales(tree, &path, locale)?;
             changes.push(FileChange {
                 display: display_path(cfg, &path),
                 locale: locale.clone(),
@@ -246,8 +278,8 @@ fn check_foreign_locales(
         return Ok(());
     }
     Err(format!(
-        "{} holds the locale(s) {} as well as `{locale}`. `normalize` writes one \
-         locale per file, so it would drop them. Split the file by locale first.",
+        "{} holds the locale(s) {} as well as `{locale}`. Writing one locale per \
+         file would drop them. Split the file by locale first.",
         path.display(),
         foreign.join(", ")
     ))

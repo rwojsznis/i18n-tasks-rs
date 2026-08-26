@@ -184,10 +184,7 @@ mod tests {
     fn every_check(s: &Session) -> Vec<Check> {
         vec![
             Check::Missing(missing::MissingReport { rows: Vec::new() }),
-            Check::Unused(unused::UnusedReport {
-                rows: Vec::new(),
-                opaque: Vec::new(),
-            }),
+            Check::Unused(unused::UnusedReport::empty()),
             Check::EqBase(eq_base::report(&s.cfg, &s.store, &s.locales)),
             Check::ConsistentInterpolations(interpolations::inconsistent(
                 &s.cfg, &s.store, &s.locales,

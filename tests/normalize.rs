@@ -133,6 +133,332 @@ fn normalize_writes_nothing_without_the_write_flag() {
 }
 
 #[test]
+fn remove_unused_writes_nothing_without_the_write_flag() {
+    let p = Project::new("remove-unused-optin", SIMPLE);
+    p.write(
+        "config/locales/en.yml",
+        "en:\n  used: Used\n  unused: Unused\n",
+    )
+    .write("app/use.rb", "I18n.t('used')\n");
+
+    let (code, text) = p.run(&["remove-unused"]);
+    assert_eq!(code, 0, "{text}");
+    assert!(text.contains("unused"), "{text}");
+    assert!(text.contains("Nothing was written"), "{text}");
+    assert_eq!(
+        p.read("config/locales/en.yml"),
+        "en:\n  used: Used\n  unused: Unused\n"
+    );
+}
+
+#[test]
+fn remove_unused_removes_only_unused_keys_selected_by_pattern() {
+    let p = Project::new("remove-unused-pattern", SIMPLE);
+    p.write(
+        "config/locales/en.yml",
+        "en:\n  used: Used\n  stale:\n    first: One\n    second: Two\n",
+    )
+    .write("app/use.rb", "I18n.t('used')\n");
+
+    let (code, text) = p.run(&["remove-unused", "--pattern", "stale.first", "--write"]);
+    assert_eq!(code, 0, "{text}");
+    assert_eq!(
+        p.read("config/locales/en.yml"),
+        "---\nen:\n  stale:\n    second: Two\n  used: Used\n"
+    );
+}
+
+#[test]
+fn remove_unused_pattern_noop_does_not_normalize_the_file() {
+    let p = Project::new("remove-unused-pattern-noop", SIMPLE);
+    p.write("config/locales/en.yml", "en:\n  z: Z\n  a: A\n");
+
+    let (code, text) = p.run(&["remove-unused", "--pattern", "not.there", "--write"]);
+    assert_eq!(code, 0, "{text}");
+    assert!(text.contains("No unused keys"), "{text}");
+    assert_eq!(p.read("config/locales/en.yml"), "en:\n  z: Z\n  a: A\n");
+}
+
+#[test]
+fn remove_unused_pattern_can_select_a_collapsed_plural_node() {
+    let p = Project::new("remove-unused-plural", SIMPLE);
+    p.write(
+        "config/locales/en.yml",
+        "en:\n  used: Used\n  apples:\n    one: One\n    other: Other\n",
+    )
+    .write("app/use.rb", "I18n.t('used')\n");
+
+    let (code, text) = p.run(&["remove-unused", "--pattern", "apples", "--write"]);
+    assert_eq!(code, 0, "{text}");
+    assert_eq!(p.read("config/locales/en.yml"), "---\nen:\n  used: Used\n");
+}
+
+#[test]
+fn remove_unused_does_not_expand_a_partial_plural_to_an_ignored_child() {
+    let p = Project::new(
+        "remove-unused-partial-plural",
+        "base_locale: en\n\
+         locales: [en]\n\
+         data:\n\
+         \x20 read:\n\
+         \x20   - config/locales/%{locale}.yml\n\
+         search:\n\
+         \x20 paths: [app/]\n\
+         ignore_unused: [apples.one]\n",
+    );
+    p.write(
+        "config/locales/en.yml",
+        "en:\n  apples:\n    one: One\n    other: Other\n",
+    );
+
+    let (code, text) = p.run(&["remove-unused", "--pattern", "apples", "--write"]);
+    assert_eq!(code, 0, "{text}");
+    assert_eq!(
+        p.read("config/locales/en.yml"),
+        "---\nen:\n  apples:\n    one: One\n"
+    );
+}
+
+#[test]
+fn remove_unused_pattern_can_select_an_unused_subtree() {
+    let p = Project::new("remove-unused-subtree", SIMPLE);
+    p.write(
+        "config/locales/en.yml",
+        "en:\n  used: Used\n  stale:\n    first: One\n    second: Two\n",
+    )
+    .write("app/use.rb", "I18n.t('used')\n");
+
+    let (code, text) = p.run(&["remove-unused", "--pattern", "stale", "--write"]);
+    assert_eq!(code, 0, "{text}");
+    assert_eq!(p.read("config/locales/en.yml"), "---\nen:\n  used: Used\n");
+}
+
+#[test]
+fn remove_unused_keep_order_preserves_the_remaining_order() {
+    let p = Project::new("remove-unused-order", SIMPLE);
+    p.write(
+        "config/locales/en.yml",
+        "en:\n  z_used: Z\n  stale: S\n  a_used: A\n",
+    )
+    .write("app/use.rb", "I18n.t('z_used')\nI18n.t('a_used')\n");
+
+    let (code, text) = p.run(&["remove-unused", "--keep-order", "--write"]);
+    assert_eq!(code, 0, "{text}");
+    assert_eq!(
+        p.read("config/locales/en.yml"),
+        "---\nen:\n  z_used: Z\n  a_used: A\n"
+    );
+}
+
+#[test]
+fn remove_unused_needs_permission_to_delete_an_empty_file() {
+    let p = Project::new("remove-unused-delete", SIMPLE);
+    p.write("config/locales/en.yml", "en:\n  stale: Stale\n");
+
+    let (code, text) = p.run(&["remove-unused", "--write"]);
+    assert_eq!(code, 2, "{text}");
+    assert!(text.contains("--allow-delete"), "{text}");
+    assert!(p.exists("config/locales/en.yml"));
+
+    let (code, text) = p.run(&["remove-unused", "--write", "--allow-delete"]);
+    assert_eq!(code, 0, "{text}");
+    assert!(!p.exists("config/locales/en.yml"));
+}
+
+#[test]
+fn remove_unused_accepts_duplicate_locale_arguments() {
+    let p = Project::new("remove-unused-duplicate-locale", SIMPLE);
+    p.write(
+        "config/locales/en.yml",
+        "en:\n  used: Used\n  stale: Stale\n",
+    )
+    .write("app/use.rb", "I18n.t('used')\n");
+
+    let (code, text) = p.run(&["remove-unused", "en", "en"]);
+    assert_eq!(code, 0, "{text}");
+    assert!(!text.contains("destination for both"), "{text}");
+}
+
+#[test]
+fn remove_unused_refuses_opaque_calls_without_an_override() {
+    let p = Project::new("remove-unused-opaque", SIMPLE);
+    p.write("config/locales/en.yml", "en:\n  live: Live\n")
+        .write("app/use.rb", "I18n.t(key_from_database)\n");
+
+    let (code, text) = p.run(&["remove-unused", "--write", "--allow-delete"]);
+    assert_eq!(code, 2, "{text}");
+    assert!(text.contains("--allow-opaque"), "{text}");
+    assert!(p.exists("config/locales/en.yml"));
+
+    let (code, text) = p.run(&[
+        "remove-unused",
+        "--write",
+        "--allow-delete",
+        "--allow-opaque",
+    ]);
+    assert_eq!(code, 0, "{text}");
+    assert!(!p.exists("config/locales/en.yml"));
+}
+
+#[test]
+fn remove_unused_dry_run_prints_a_diff_and_does_not_write() {
+    let p = Project::new("remove-unused-dry-run", SIMPLE);
+    p.write(
+        "config/locales/en.yml",
+        "en:\n  used: Used\n  stale: Stale\n",
+    )
+    .write("app/use.rb", "I18n.t('used')\n");
+
+    let (code, text) = p.run(&["remove-unused", "--dry-run"]);
+    assert_eq!(code, 0, "{text}");
+    assert!(text.contains("--- a/config/locales/en.yml"), "{text}");
+    assert!(text.contains("-  stale: Stale"), "{text}");
+    assert_eq!(
+        p.read("config/locales/en.yml"),
+        "en:\n  used: Used\n  stale: Stale\n"
+    );
+}
+
+#[test]
+fn remove_unused_rejects_write_with_dry_run() {
+    let p = Project::new("remove-unused-contradict", SIMPLE);
+    p.write("config/locales/en.yml", "en:\n  stale: Stale\n");
+
+    let (code, text) = p.run(&["remove-unused", "--write", "--dry-run"]);
+    assert_eq!(code, 2, "{text}");
+    assert!(text.contains("contradict"), "{text}");
+    assert!(p.exists("config/locales/en.yml"));
+}
+
+#[test]
+fn remove_unused_json_does_not_claim_a_refused_write() {
+    let p = Project::new("remove-unused-json-refusal", SIMPLE);
+    p.write("config/locales/en.yml", "en:\n  stale: Stale\n");
+
+    let out = Command::new(BIN)
+        .args(["remove-unused", "--write", "--format", "json"])
+        .arg("-c")
+        .arg(p.root.join("config/i18n-tasks.yml"))
+        .arg("--root")
+        .arg(&p.root)
+        .output()
+        .expect("binary runs");
+    assert_eq!(out.status.code(), Some(2));
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).expect("valid JSON");
+    assert_eq!(json["written"], false);
+    assert_eq!(json["unused"]["rows"][0]["key"], "stale");
+    assert!(p.exists("config/locales/en.yml"));
+}
+
+#[test]
+fn remove_unused_json_reports_a_successful_write() {
+    let p = Project::new("remove-unused-json-success", SIMPLE);
+    p.write(
+        "config/locales/en.yml",
+        "en:\n  used: Used\n  stale: Stale\n",
+    )
+    .write("app/use.rb", "I18n.t('used')\n");
+
+    let out = Command::new(BIN)
+        .args(["remove-unused", "--write", "--format", "json"])
+        .arg("-c")
+        .arg(p.root.join("config/i18n-tasks.yml"))
+        .arg("--root")
+        .arg(&p.root)
+        .output()
+        .expect("binary runs");
+    assert_eq!(out.status.code(), Some(0));
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).expect("valid JSON");
+    assert_eq!(json["written"], true);
+    assert_eq!(json["unused"]["rows"][0]["key"], "stale");
+    assert_eq!(p.read("config/locales/en.yml"), "---\nen:\n  used: Used\n");
+}
+
+#[test]
+fn remove_unused_json_noop_has_an_empty_plan() {
+    let p = Project::new("remove-unused-json-noop", SIMPLE);
+    p.write("config/locales/en.yml", "en:\n  used: Used\n")
+        .write("app/use.rb", "I18n.t('used')\n");
+
+    let out = Command::new(BIN)
+        .args(["remove-unused", "--format", "json"])
+        .arg("-c")
+        .arg(p.root.join("config/i18n-tasks.yml"))
+        .arg("--root")
+        .arg(&p.root)
+        .output()
+        .expect("binary runs");
+    assert_eq!(out.status.code(), Some(0));
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).expect("valid JSON");
+    assert_eq!(json["written"], false);
+    assert_eq!(json["changes"], serde_json::json!([]));
+    assert_eq!(json["files_routed"], 0);
+}
+
+#[test]
+fn remove_unused_changes_only_the_selected_locale() {
+    let p = Project::new(
+        "remove-unused-locale",
+        "base_locale: en\n\
+         locales: [en, de]\n\
+         data:\n\
+         \x20 read:\n\
+         \x20   - config/locales/%{locale}.yml\n\
+         search:\n\
+         \x20 paths: [app/]\n",
+    );
+    p.write("config/locales/en.yml", "en:\n  stale: English\n")
+        .write("config/locales/de.yml", "de:\n  stale: German\n");
+
+    let (code, text) = p.run(&["remove-unused", "en", "--write", "--allow-delete"]);
+    assert_eq!(code, 0, "{text}");
+    assert!(!p.exists("config/locales/en.yml"));
+    assert_eq!(p.read("config/locales/de.yml"), "de:\n  stale: German\n");
+}
+
+#[test]
+fn remove_unused_refuses_to_delete_a_file_that_holds_an_unselected_locale() {
+    let p = Project::new(
+        "remove-unused-shared-unselected",
+        "base_locale: en\n\
+         locales: [en, de]\n\
+         data:\n\
+         \x20 read:\n\
+         \x20   - config/locales/all.yml\n\
+         search:\n\
+         \x20 paths: [app/]\n",
+    );
+    let contents = "en:\n  stale: English\nde:\n  stale: German\n";
+    p.write("config/locales/all.yml", contents);
+
+    let (code, text) = p.run(&["remove-unused", "en", "--write", "--allow-delete"]);
+    assert_eq!(code, 2, "{text}");
+    assert!(text.contains("holds the locale(s) de"), "{text}");
+    assert_eq!(p.read("config/locales/all.yml"), contents);
+}
+
+#[test]
+fn remove_unused_does_not_apply_duplicate_deletes_for_a_shared_file() {
+    let p = Project::new(
+        "remove-unused-shared-selected",
+        "base_locale: en\n\
+         locales: [en, de]\n\
+         data:\n\
+         \x20 read:\n\
+         \x20   - config/locales/all.yml\n\
+         search:\n\
+         \x20 paths: [app/]\n",
+    );
+    let contents = "en:\n  stale: English\nde:\n  stale: German\n";
+    p.write("config/locales/all.yml", contents);
+
+    let (code, text) = p.run(&["remove-unused", "--write", "--allow-delete"]);
+    assert_eq!(code, 2, "{text}");
+    assert!(text.contains("holds the locale(s) de"), "{text}");
+    assert_eq!(p.read("config/locales/all.yml"), contents);
+}
+
+#[test]
 fn dry_run_prints_a_unified_diff_and_writes_nothing() {
     let p = Project::new("dryrun", SIMPLE);
     p.write("config/locales/en.yml", "en:\n  b: B\n  a: A\n");

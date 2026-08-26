@@ -13,6 +13,7 @@
 use clap::{Parser, Subcommand};
 use i18n_tasks_rs::check::{Check, any_found, health_json};
 use i18n_tasks_rs::config::DEFAULT_CONFIG_PATH;
+use i18n_tasks_rs::pattern::Pattern;
 use i18n_tasks_rs::report::missing::MissingType;
 use i18n_tasks_rs::report::{Outcome, eq_base, find, interpolations, missing, normalize, unused};
 use i18n_tasks_rs::session::{Session, SessionOptions};
@@ -207,6 +208,13 @@ enum Command {
         #[command(flatten)]
         common: Common,
     },
+    /// Remove translations that the source never uses.
+    RemoveUnused {
+        #[command(flatten)]
+        common: Common,
+        #[command(flatten)]
+        flags: RemoveUnusedFlags,
+    },
     /// Report translations whose value is the same as in the base locale.
     EqBase {
         #[command(flatten)]
@@ -297,6 +305,28 @@ struct NormalizeFlags {
     /// Allow deleting a file that ends up with no keys.
     #[arg(long)]
     allow_delete: bool,
+}
+
+#[derive(clap::Args, Clone, Debug)]
+struct RemoveUnusedFlags {
+    /// Remove only unused keys that match this key pattern.
+    #[arg(long, short = 'p')]
+    pattern: Option<String>,
+    /// Preserve the order of keys that remain.
+    #[arg(long, short = 'k')]
+    keep_order: bool,
+    /// Write the changes. Without this, print the plan only.
+    #[arg(long)]
+    write: bool,
+    /// Print a unified diff of every change, and write nothing.
+    #[arg(long)]
+    dry_run: bool,
+    /// Allow deleting a file that ends up with no keys.
+    #[arg(long)]
+    allow_delete: bool,
+    /// Allow writes when calls with statically unknown keys were found.
+    #[arg(long)]
+    allow_opaque: bool,
 }
 
 /// `init-config`'s flags, plus the two defaults they resolve to.
@@ -455,6 +485,10 @@ fn run() -> Result<u8, String> {
             let used = s.scan()?;
             let report = unused::report(&s.cfg, &s.store, &used, &s.locales);
             emit(&s, &Check::Unused(report))
+        }
+        Command::RemoveUnused { common, flags } => {
+            let s = common.open()?;
+            remove_unused_command(&s, flags)
         }
         Command::EqBase { common } => {
             let s = common.open()?;
@@ -689,6 +723,105 @@ fn normalize_command(s: &Session, flags: &NormalizeFlags) -> Result<u8, String> 
     }
     normalize::apply(&report)?;
     Ok(EXIT_OK)
+}
+
+/// ref: lib/i18n/tasks/command/commands/usages.rb#remove_unused
+fn remove_unused_command(s: &Session, flags: &RemoveUnusedFlags) -> Result<u8, String> {
+    if flags.write && flags.dry_run {
+        return Err("`--write` and `--dry-run` contradict each other".into());
+    }
+    let used = s.scan()?;
+    let mut unused = unused::report(&s.cfg, &s.store, &used, &s.locales);
+    if let Some(pattern) = flags.pattern.as_deref().map(Pattern::compile) {
+        unused.select_pattern(&pattern);
+    }
+    if !unused.has_removable() {
+        if s.json {
+            outln!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "check": "remove_unused",
+                    "written": false,
+                    "config_digest": s.cfg.digest,
+                    "locales": s.locales,
+                    "changes": [],
+                    "files_routed": 0,
+                }))
+                .map_err(|e| e.to_string())?
+            );
+        } else {
+            outln!("No unused keys to remove");
+        }
+        return Ok(EXIT_OK);
+    }
+    let mut cfg = s.cfg.clone();
+    if flags.keep_order {
+        cfg.data.keep_order = true;
+    }
+    let report = normalize::plan_filtered(&cfg, &s.store, &s.locales, false, &|locale, key| {
+        !unused.removable(locale, key)
+    })?;
+    let deletions = report.deletions();
+    if !deletions.is_empty() {
+        errln!("{} file(s) end up with no keys:", deletions.len());
+        for deletion in &deletions {
+            errln!("  {}", deletion.display);
+        }
+    }
+    if !s.json {
+        out!("{}", unused.to_text());
+        out!("{}", report.to_normalize_text(flags.dry_run));
+    }
+    if !flags.write {
+        if s.json {
+            outln!("{}", remove_unused_json(s, &unused, &report, false)?);
+        } else {
+            outln!("Nothing was written. Pass `--write` to apply, `--dry-run` to see the diff.");
+        }
+        return Ok(EXIT_OK);
+    }
+    if !unused.opaque.is_empty() && !flags.allow_opaque {
+        if s.json {
+            outln!("{}", remove_unused_json(s, &unused, &report, false)?);
+        }
+        return Err(format!(
+            "refusing to remove keys while {} translation call(s) have an unknown key. \
+             Add `# i18n-tasks-use` or `ignore_unused` rules, or pass `--allow-opaque` \
+             after you verify the calls.",
+            unused.opaque.len()
+        ));
+    }
+    if !deletions.is_empty() && !flags.allow_delete {
+        if s.json {
+            outln!("{}", remove_unused_json(s, &unused, &report, false)?);
+        }
+        return Err(
+            "refusing to delete the files listed above. Pass `--allow-delete` to allow it.".into(),
+        );
+    }
+    normalize::apply(&report)?;
+    if s.json {
+        outln!("{}", remove_unused_json(s, &unused, &report, true)?);
+    }
+    Ok(EXIT_OK)
+}
+
+fn remove_unused_json(
+    s: &Session,
+    unused: &unused::UnusedReport,
+    report: &normalize::NormalizeReport,
+    written: bool,
+) -> Result<String, String> {
+    serde_json::to_string_pretty(&serde_json::json!({
+        "check": "remove_unused",
+        "written": written,
+        "config_digest": s.cfg.digest,
+        "locales": s.locales,
+        "unused": unused,
+        "changes": report.changes,
+        "files_routed": report.files_routed,
+    }))
+    .map_err(|e| e.to_string())
 }
 
 /// Dumps every used-key occurrence. Exists for diffing this tool against the
