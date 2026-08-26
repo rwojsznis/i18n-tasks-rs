@@ -3,7 +3,7 @@ name: Release binaries
 on:
   push:
     tags:
-      - "v*"
+      - "v[0-9]*.[0-9]*.[0-9]*"
 
 permissions:
   contents: read
@@ -45,7 +45,14 @@ jobs:
       - name: Build binary
         env:
           CC_x86_64_unknown_linux_musl: musl-gcc
-        run: cargo build --locked --release --target ${{ matrix.target }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Invalid release tag: $GITHUB_REF_NAME" >&2
+            exit 1
+          fi
+          I18N_TASKS_VERSION="$VERSION" cargo build --locked --release --target "${{ matrix.target }}"
+          test "$("target/${{ matrix.target }}/release/i18n-tasks-rs" -V)" = "i18n-tasks-rs $VERSION"
 
       - name: Package binary
         run: tar -C target/${{ matrix.target }}/release -czf ${{ matrix.archive }} i18n-tasks-rs

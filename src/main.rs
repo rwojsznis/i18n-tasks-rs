@@ -76,16 +76,30 @@ macro_rules! errln {
 const EXIT_OK: u8 = 0;
 const EXIT_FOUND: u8 = 1;
 const EXIT_FAILURE: u8 = 2;
+const VERSION: &str = match option_env!("I18N_TASKS_VERSION") {
+    Some(version) => version,
+    None => env!("CARGO_PKG_VERSION"),
+};
 
 #[derive(Parser)]
 #[command(
     name = "i18n-tasks-rs",
     about = "Manage translations in Ruby applications. A Rust port of i18n-tasks.",
-    version
+    version = VERSION
 )]
 struct Cli {
     #[command(subcommand)]
     command: Command,
+}
+
+#[cfg(test)]
+mod version_tests {
+    use super::VERSION;
+
+    #[test]
+    fn version_falls_back_to_the_cargo_package_version() {
+        assert_eq!(VERSION, env!("CARGO_PKG_VERSION"));
+    }
 }
 
 /// Sizes the `rayon` pool the scan fans out over. Called once, from
