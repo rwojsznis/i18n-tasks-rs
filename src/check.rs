@@ -1,5 +1,5 @@
-//! One check's result under the name the CLI reports it by, and the two `-f
-//! json` envelopes built from it.
+//! One check's result under the name the CLI reports it by, and the `-f json`
+//! envelopes built from it.
 //!
 //! The names are the CLI's, not the reports': `InterpolationReport` serves two
 //! checks and `NormalizeReport` serves `check-normalized` as well as
@@ -86,6 +86,78 @@ impl Check {
             locales: &session.locales,
             report: self,
         };
+        serde_json::to_string_pretty(&env).map_err(|e| e.to_string())
+    }
+}
+
+/// The `remove-unused` envelope.
+///
+/// Not a `Check`: the command writes, so it reports a plan and a `written` flag
+/// rather than an outcome, and it is the only envelope that carries two reports.
+/// Every refusal path in the command emits it too, so `written` is the one
+/// field that separates a refused run from a completed one.
+#[derive(Debug, Clone, Copy)]
+pub struct RemoveUnusedJson<'a> {
+    unused: Option<&'a unused::UnusedReport>,
+    plan: Option<&'a normalize::NormalizeReport>,
+    written: bool,
+}
+
+impl<'a> RemoveUnusedJson<'a> {
+    /// Nothing was unused, so no plan was ever built. The empty plan is
+    /// reported all the same: a consumer reads the same fields either way.
+    pub fn nothing_to_remove() -> RemoveUnusedJson<'a> {
+        RemoveUnusedJson {
+            unused: None,
+            plan: None,
+            written: false,
+        }
+    }
+
+    pub fn planned(
+        unused: &'a unused::UnusedReport,
+        plan: &'a normalize::NormalizeReport,
+    ) -> RemoveUnusedJson<'a> {
+        RemoveUnusedJson {
+            unused: Some(unused),
+            plan: Some(plan),
+            written: false,
+        }
+    }
+
+    /// The same envelope after `apply` succeeded. Taken by value, so the
+    /// claim cannot be set on a plan that has not been applied yet and then
+    /// reported by an earlier path.
+    #[must_use]
+    pub fn written(self) -> RemoveUnusedJson<'a> {
+        RemoveUnusedJson {
+            written: true,
+            ..self
+        }
+    }
+
+    /// # Errors
+    ///
+    /// A report does not serialize.
+    pub fn to_json(&self, session: &Session) -> Result<String, String> {
+        const NO_CHANGES: &[normalize::FileChange] = &[];
+        // Built through `json!` like the `normalize` envelope beside it, and
+        // not from a struct like the check envelopes: `serde_json`'s map is a
+        // `BTreeMap` without `preserve_order`, so this one has always come out
+        // with its keys sorted at every level. That is the emitted interface.
+        let mut env = serde_json::json!({
+            "check": "remove_unused",
+            "written": self.written,
+            "config_digest": session.cfg.digest,
+            "locales": session.locales,
+            "changes": self.plan.map_or(NO_CHANGES, |p| &p.changes),
+            "files_routed": self.plan.map_or(0, |p| p.files_routed),
+        });
+        // Absent, rather than null, when there was nothing unused to plan for.
+        if let (Some(unused), Some(map)) = (self.unused, env.as_object_mut()) {
+            let unused = serde_json::to_value(unused).map_err(|e| e.to_string())?;
+            map.insert("unused".to_string(), unused);
+        }
         serde_json::to_string_pretty(&env).map_err(|e| e.to_string())
     }
 }
