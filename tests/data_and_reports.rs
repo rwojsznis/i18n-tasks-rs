@@ -210,10 +210,8 @@ fn external_keys_are_never_unused_and_never_missing() {
     );
     let store = Store::load(&cfg).unwrap();
     let used = UsedKeys::scan(&cfg).unwrap();
-    // `ext` lives only in external data, so it is not missing.
     let m = missing::report(&cfg, &store, &used, &store.locales, &[MissingType::Used]);
     assert!(m.rows.is_empty(), "{:?}", m.rows);
-    // And external data is never reported unused.
     let u = unused::report(&cfg, &store, &used, &store.locales);
     assert_eq!(
         u.rows.iter().map(|r| r.key.as_str()).collect::<Vec<_>>(),
@@ -1041,7 +1039,6 @@ fn the_consistency_check_skips_what_it_cannot_compare() {
         "base_locale: en\nlocales: [en, es]\ndata:\n  read:\n    - config/locales/%{locale}.yml\nsearch:\n  paths: [app/]\n",
     );
     let store = Store::load(&cfg).unwrap();
-    // A locale with no tree at all is skipped.
     let locales = vec!["en".to_string(), "es".to_string(), "zz".to_string()];
     let r = interpolations::inconsistent(&cfg, &store, &locales);
     assert_eq!(

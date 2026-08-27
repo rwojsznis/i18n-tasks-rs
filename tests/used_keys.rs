@@ -216,7 +216,6 @@ fn the_extension_picks_the_scanner() {
     assert_eq!(erb.keys[0].0, "x.title");
     let slim = scan_file(b"= t '.title'", Path::new("app/views/x.html.slim"), &cfg());
     assert_eq!(slim.keys[0].0, "x.title");
-    // A binary-ish extension the walk would exclude anyway holds no key.
     let none = scan_file(b"nothing here", Path::new("app/views/x.txt"), &cfg());
     assert!(none.keys.is_empty());
 }
@@ -291,7 +290,6 @@ fn a_first_argument_that_is_not_a_key_yields_nothing() {
         assert!(scan.patterns.is_empty(), "{src}");
         assert!(scan.opaque.is_empty(), "{src}: {:?}", scan.opaque);
     }
-    // A call with no arguments at all is not a translation call either.
     let scan = scan_source("t\nt()\n", "app/models/m.rb");
     assert!(scan.keys.is_empty());
     assert!(scan.opaque.is_empty(), "{:?}", scan.opaque);
@@ -312,7 +310,6 @@ fn a_splat_or_an_odd_keyword_name_does_not_hide_the_key() {
     assert_eq!(sorted_unique_keys(&scan), vec!["a"]);
     let scan = scan_source("t('b', **opts, scope: :s)\n", "app/models/m.rb");
     assert_eq!(sorted_unique_keys(&scan), vec!["s.b"]);
-    // A computed keyword name reduces to nothing and is dropped.
     let scan = scan_source("t('c', some_var => 1)\n", "app/models/m.rb");
     assert_eq!(sorted_unique_keys(&scan), vec!["c"]);
 }
@@ -359,7 +356,6 @@ fn a_nested_interpolation_becomes_one_wildcard() {
             .collect::<Vec<_>>(),
         vec!["a.b*:.z"]
     );
-    // An interpolated symbol takes the same path as an interpolated string.
     let scan = scan_source("t(:\"a.#{x}\")\n", "app/models/m.rb");
     assert_eq!(
         scan.patterns

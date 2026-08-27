@@ -5,7 +5,6 @@ on:
     branches: [main]
   pull_request:
 
-# One run per branch or PR. A new push cancels the run that is in progress.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -35,25 +34,17 @@ jobs:
       - name: cargo clippy
         run: cargo clippy --locked --all-targets -- -D warnings
 
-      # The doc comments carry the `ref:` citations and the intra-doc links
-      # between them. `--document-private-items` is what makes that worth
-      # running: nearly every documented item in this crate is private.
       - name: cargo doc
         run: cargo doc --locked --no-deps --document-private-items
         env:
           RUSTDOCFLAGS: -D warnings -D rustdoc::broken_intra_doc_links
 
-      # Four dependencies were declared and never imported. `cargo clippy`
-      # cannot see that, so this is what keeps the manifest honest.
       - name: cargo machete
         run: |
           # renovate: datasource=crate depName=cargo-machete
           cargo install --locked cargo-machete --version 0.9.2
           cargo machete
 
-      # Vulnerabilities in the lock file fail the job; an unmaintained or
-      # yanked crate is only printed, because `--deny warnings` would turn a
-      # green main red without a change here.
       - name: cargo audit
         run: |
           # renovate: datasource=crate depName=cargo-audit
@@ -81,8 +72,6 @@ jobs:
       - name: cargo test
         run: cargo test --locked --all-targets
 
-      # `Pattern::run`, `flatten` and the YAML reader all recurse, and a release
-      # build has different stack headroom and no overflow checks.
       - name: cargo test --release
         run: cargo test --locked --release --all-targets
 

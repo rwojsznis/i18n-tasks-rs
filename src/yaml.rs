@@ -147,7 +147,6 @@ pub fn parse(src: &str, path: &Path) -> Result<Option<Node>, YamlError> {
     }
 
     let mut i = 0usize;
-    // Skip to the first document.
     while i < events.len() {
         match events[i].0 {
             Event::StreamStart | Event::DocumentStart(_) => i += 1,
@@ -460,14 +459,11 @@ mod tests {
         let en = n.map_get("en").unwrap();
         let a = en.map_get("a").unwrap();
         let b = en.map_get("b").unwrap();
-        // A scalar is not a map and not a sequence.
         assert!(a.as_map().is_none());
         assert!(a.as_seq().is_none());
-        // A map and a sequence are not scalars.
         assert!(en.as_str().is_none());
         assert!(b.as_str().is_none());
         assert!(b.as_map().is_none());
-        // `map_get` on a non-map is `None`, not a panic.
         assert!(a.map_get("x").is_none());
         assert_eq!(en.line(), 2);
         assert_eq!(b.line(), 3);
@@ -478,9 +474,7 @@ mod tests {
         assert!(p("~\n").unwrap().is_none());
         assert!(p("null\n").unwrap().is_none());
         assert!(p("NULL\n").unwrap().is_none());
-        // A quoted `null` is a string, so it is a real document.
         assert!(p("\"null\"\n").unwrap().is_some());
-        // A comment-only file holds no document at all.
         assert!(p("# nothing here\n").unwrap().is_none());
     }
 

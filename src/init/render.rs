@@ -240,13 +240,11 @@ mod tests {
         for line in &lines[1..] {
             assert!(line.starts_with("#     "), "{line:?}");
         }
-        // Every word survives, in order, and none is split.
         let back: Vec<&str> = lines
             .iter()
             .flat_map(|l| l.trim_start_matches('#').split_whitespace())
             .collect();
         assert_eq!(back, note.split_whitespace().collect::<Vec<&str>>());
-        // A single short note is one line, not two.
         assert_eq!(wrap_comment("short enough"), "#   short enough\n");
     }
 

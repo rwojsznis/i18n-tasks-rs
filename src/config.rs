@@ -647,7 +647,6 @@ mod tests {
         );
         let e = parse("data:\n  router: isolating_router\n").unwrap_err();
         assert!(e.contains("unknown router `isolating_router`"), "{e}");
-        // A mapping where a name belongs is the same error.
         let e = parse("data:\n  router:\n    a: b\n").unwrap_err();
         assert!(e.contains("unknown router"), "{e}");
     }
@@ -677,14 +676,11 @@ mod tests {
 
     #[test]
     fn rejects_the_wrong_shape_with_the_key_in_the_message() {
-        // A mapping where a string or a list belongs.
         let e = parse("search:\n  paths:\n    a: b\n").unwrap_err();
         assert!(e.contains("search.paths"), "{e}");
         assert!(e.contains("expected a string or a list"), "{e}");
-        // A list holding something that is not a string.
         let e = parse("search:\n  paths:\n    - [a]\n").unwrap_err();
         assert!(e.contains("expected a string"), "{e}");
-        // `data` and `search` themselves must be mappings.
         let e = parse("data: config/locales\n").unwrap_err();
         assert!(e.contains("must be a mapping"), "{e}");
         let e = parse("search: app/\n").unwrap_err();
@@ -693,16 +689,13 @@ mod tests {
 
     #[test]
     fn rejects_a_malformed_write_rule() {
-        // A mapping where the rule list belongs.
         let e = parse("data:\n  write:\n    a: b\n").unwrap_err();
         assert!(e.contains("expected a string or a list"), "{e}");
-        // Three elements is neither a path nor a [pattern, path] pair.
         let e = parse("data:\n  write:\n    - [a, b, c]\n").unwrap_err();
         assert!(
             e.contains("must be a path or a [pattern, path] pair"),
             "{e}"
         );
-        // The two halves of a pair must both be strings.
         let e = parse("data:\n  write:\n    - [[a], b]\n").unwrap_err();
         assert!(e.contains("pattern must be a string"), "{e}");
         let e = parse("data:\n  write:\n    - [a, [b]]\n").unwrap_err();

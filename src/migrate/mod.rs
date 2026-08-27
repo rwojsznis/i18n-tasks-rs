@@ -297,7 +297,6 @@ mod tests {
         let cfg =
             Config::parse(&m.output, Path::new(MIGRATION_TARGET), PathBuf::from(".")).unwrap();
         assert!(cfg.data.external.is_empty());
-        // The commented-out example that belonged to it goes too.
         assert!(!m.output.contains("vendor/locales"), "{}", m.output);
     }
 
@@ -400,7 +399,6 @@ mod tests {
         assert!(reason("data.something_else").contains("no such setting"));
         assert!(reason("search.ast_matchers").contains("always on"));
         assert!(reason("search.unheard_of").contains("no such setting"));
-        // What survived is still a config this tool reads.
         assert!(m.output.contains("read:"));
         assert!(m.output.contains("paths:"));
     }
@@ -421,7 +419,6 @@ mod tests {
             .find(|d| d.key == "data.router")
             .expect("dropped");
         assert!(d.reason.contains("must be a name"), "{}", d.reason);
-        // The setting itself is gone; only the header still names it.
         assert!(!m.output.contains("  router:"), "{}", m.output);
         assert!(m.output.contains("read:"), "{}", m.output);
     }
@@ -430,12 +427,9 @@ mod tests {
     /// rather than leaving half a tag in the output.
     #[test]
     fn an_unterminated_erb_tag_is_removed_to_the_end() {
-        // In a comment, where the whole comment line goes.
         let m = run("base_locale: de\nlocales: [de]\n# <% never closed\n");
         assert!(!m.output.contains("<%"), "{}", m.output);
         assert!(m.output.contains("base_locale: de"), "{}", m.output);
-        // In a value, where the tag is replaced and the rest of the line with
-        // it, because there is no `%>` to stop at.
         let m = run("base_locale: de\nlocales: [de]\nignore_unused:\n  - \"<%= never closed\"\n");
         assert!(!m.output.contains("<%"), "{}", m.output);
         assert!(m.output.contains("[ERB]"), "{}", m.output);
@@ -493,9 +487,7 @@ mod tests {
         assert!(text.contains("added base_locale: en"), "{text}");
         assert!(text.contains("removed ERB on 1 line(s)"), "{text}");
         assert!(text.contains("internal_locale"), "{text}");
-        // Nothing needs a human here.
         assert!(!m.needs_attention());
-        // With `write` set the header says where it went instead.
         let written = to_text(
             &m,
             Path::new("config/i18n-tasks.yml.erb"),

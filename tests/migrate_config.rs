@@ -255,7 +255,6 @@ fn from_and_to_can_be_named_explicitly() {
     // and the destination directory was created.
     let written = std::fs::read_to_string(s.root.join("out/new.yml")).unwrap();
     assert!(written.contains("base_locale: fr"), "{written}");
-    // The default target was left alone.
     assert!(!s.target().exists());
 }
 

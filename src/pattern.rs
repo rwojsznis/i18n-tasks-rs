@@ -502,8 +502,6 @@ mod tests {
         assert_eq!(got, vec!["x", "c"]);
     }
 
-    // Additional coverage beyond the gem spec.
-
     #[test]
     fn empty_set_matches_nothing() {
         let empty: [&str; 0] = [];
@@ -554,7 +552,6 @@ mod tests {
         // gem's lookbehind is `(?<=\A|\.)`.
         assert!(!m("a:", "ab"));
         assert!(!m("a:", "a.b"));
-        // The same pattern with the dot in place does match.
         assert!(m("a.:", "a.b"));
         // A whole segment needs at least one character, so a trailing dot in
         // the key leaves nothing for it.

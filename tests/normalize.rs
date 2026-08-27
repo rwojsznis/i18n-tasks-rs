@@ -571,7 +571,6 @@ fn a_file_holding_two_locales_is_refused() {
     let (code, text) = p.run(&["normalize", "--write"]);
     assert_eq!(code, 2, "{text}");
     assert!(text.contains("holds the locale(s) de"), "{text}");
-    // Nothing was touched.
     assert_eq!(
         p.read("config/locales/en.yml"),
         "en:\n  a: A\nde:\n  a: A\n"
@@ -699,7 +698,6 @@ fn normalize_emits_json() {
     assert!(text.contains("\"check\": \"normalize\""), "{text}");
     assert!(text.contains("\"written\": false"), "{text}");
     assert!(text.contains("\"files_routed\""), "{text}");
-    // Nothing was touched.
     assert_eq!(p.read("config/locales/en.yml"), "en:\n  b: B\n  a: A\n");
 
     let (code, text) = p.run(&["normalize", "-f", "json", "--write"]);
@@ -725,7 +723,6 @@ fn a_dry_run_still_lists_the_deletions() {
     assert_eq!(code, 0, "{text}");
     assert!(text.contains("1 file(s) end up with no keys"), "{text}");
     assert!(text.contains("extra.en.yml"), "{text}");
-    // Nothing was removed.
     assert!(p.exists("config/locales/extra.en.yml"));
 }
 

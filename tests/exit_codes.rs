@@ -147,7 +147,6 @@ fn health_runs_all_five_checks() {
     let (code, text) = p.run(&["health"]);
     assert_eq!(code, 0);
     assert!(text.contains("All data is normalized"), "{text}");
-    // The statistics header comes first.
     assert!(text.starts_with("1 keys in 1 locales (en)"), "{text}");
 }
 
@@ -268,7 +267,6 @@ fn the_locales_flag_matches_the_gems_list_parser() {
         text.push_str(&String::from_utf8_lossy(&out.stderr));
         (out.status.code().unwrap_or(-1), text)
     };
-    // The JSON `locales` array, flattened onto one line.
     let locales_of = |text: &str| -> String {
         let start = text.find("\"locales\": [").expect("a locales key");
         let rest = &text[start..];

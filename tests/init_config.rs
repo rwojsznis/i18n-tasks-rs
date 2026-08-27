@@ -44,9 +44,7 @@ fn the_flat_layout_is_detected_whole() {
     );
     assert_eq!(g.detected.locales, ["de", "en", "fr"]);
 
-    // Only the search paths that exist.
     assert_eq!(cfg.search.paths, ["app/", "lib/"]);
-    // A build directory under a search path is excluded up front.
     assert_eq!(cfg.search.exclude, ["app/assets/builds"]);
 
     // `app/controllers` and `app/views` are gem defaults that exist here.
