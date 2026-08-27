@@ -1,7 +1,7 @@
 //! The state every project-reading command shares, and the locale list it runs
 //! over.
 //!
-//! This is the CLI's work, but not the binary's: `main.rs` keeps the clap
+//! This is the CLI's work, but not the binary's: `src/cli/` keeps the clap
 //! structs, the exit codes and the four printing macros, and everything a test
 //! would otherwise have to spawn a process to reach lives here.
 

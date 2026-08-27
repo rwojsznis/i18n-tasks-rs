@@ -115,22 +115,8 @@ impl NormalizeReport {
     ///
     /// The plan does not serialize.
     pub fn to_normalize_json(&self, session: &Session, written: bool) -> Result<String, String> {
-        self.to_write_json(session, "normalize", written)
-    }
-
-    /// Serializes the write plan for a named command.
-    ///
-    /// # Errors
-    ///
-    /// The plan does not serialize.
-    pub fn to_write_json(
-        &self,
-        session: &Session,
-        command: &str,
-        written: bool,
-    ) -> Result<String, String> {
         serde_json::to_string_pretty(&serde_json::json!({
-            "check": command,
+            "check": "normalize",
             "written": written,
             "config_digest": session.cfg.digest,
             "locales": session.locales,

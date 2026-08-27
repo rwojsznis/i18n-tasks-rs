@@ -595,7 +595,7 @@ failed write, so `i18n-tasks-rs unused -l fr | more` and then `q` printed
 `failed printing to stdout: Broken pipe` and exited 101.
 
 A reader that quits early is not a tool failure. Every CLI write now goes
-through `write_out`/`write_err` in `src/main.rs`, which drops the output on
+through `write_out`/`write_err` in `src/cli/out.rs`, which drops the output on
 `ErrorKind::BrokenPipe` and leaves the exit code alone, so `unused | head`
 still exits 1 and `unused` on a clean project still exits 0. Restoring the
 default `SIGPIPE` handler instead would need `libc` and an `unsafe` block, and
