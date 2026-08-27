@@ -34,8 +34,7 @@ jobs:
 
       - name: Install stable Rust
         run: |
-          rustup update stable --no-self-update
-          rustup default stable
+          rustup show active-toolchain
           rustup target add ${{ matrix.target }}
 
       - name: Install the musl C toolchain

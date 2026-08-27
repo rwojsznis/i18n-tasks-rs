@@ -3,6 +3,7 @@ name = "i18n-tasks-rs"
 # Internal Cargo version. Release binaries get their version from the Git tag.
 version = "0.0.0"
 edition = "2024"
+rust-version = "1.98"
 description = "A Rust port of the i18n-tasks gem: find missing and unused translations in a Rails project"
 license = "MIT"
 readme = "README.md"
