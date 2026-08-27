@@ -35,6 +35,7 @@ path = "src/main.rs"
 [profile.release]
 lto = true
 codegen-units = 1
+strip = "symbols"
 
 # Kept in the manifest rather than in the CI command line, so a local `cargo
 # clippy` says the same thing CI does. The three panic-family restriction lints
