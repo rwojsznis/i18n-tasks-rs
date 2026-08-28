@@ -144,6 +144,19 @@ fn comments_html_erb_matches_the_gem_spec() {
     );
 }
 
+/// Only a magic comment is read out of a comment tag. The gem parses the tag
+/// body as live Ruby and reports every call in it.
+///
+/// ref: erb_ast_scanner.rb#process_comments
+#[test]
+fn a_comment_tag_without_a_magic_comment_yields_nothing() {
+    let scan = scan_fixture("used_keys/app/views/application/commented_out.html.erb");
+    assert_eq!(keys(&scan), vec!["live.key"]);
+    // Blocker B5 must not turn the commented interpolated key into a pattern.
+    assert!(patterns(&scan).is_empty(), "{:?}", patterns(&scan));
+    assert!(scan.opaque.is_empty(), "{:?}", scan.opaque);
+}
+
 /// ref: spec/used_keys_erb_prism_spec.rb "partials"
 #[test]
 fn partials_resolve_relative_keys() {
