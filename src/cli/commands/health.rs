@@ -12,6 +12,9 @@ use i18n_tasks_rs::stats::forest_stats;
 pub(crate) struct HealthArgs {
     #[command(flatten)]
     common: Common,
+    /// Print nothing when every check passes. A failure still reports in full.
+    #[arg(long, short = 'q')]
+    quiet: bool,
 }
 
 impl HealthArgs {
@@ -45,13 +48,18 @@ impl HealthArgs {
 
         let found = any_found(&checks);
 
-        if s.json {
-            outln!("{}", health_json(&s, &stats, &checks)?);
-        } else {
-            outln!("{}", stats.to_text());
-            for check in &checks {
-                outln!();
-                out!("{}", check.to_text());
+        // A silent pass is the whole point of `--quiet`: a git hook that says
+        // nothing until something is wrong. It hides no warning and no tool
+        // failure, both of which go to stderr before this point.
+        if found || !self.quiet {
+            if s.json {
+                outln!("{}", health_json(&s, &stats, &checks)?);
+            } else {
+                outln!("{}", stats.to_text());
+                for check in &checks {
+                    outln!();
+                    out!("{}", check.to_text());
+                }
             }
         }
         Ok(ExitStatus::found(found))

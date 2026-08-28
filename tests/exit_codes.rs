@@ -467,3 +467,47 @@ fn the_working_directory_is_the_default_root() {
     assert!(text.starts_with("1 keys in 1 locales (en)"), "{text}");
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// `health --quiet` prints nothing when every check passes, so a git hook can
+/// run it without adding noise to a clean commit. The exit code is unchanged.
+#[test]
+fn health_quiet_prints_nothing_when_every_check_passes() {
+    let p = Project::new("healthquiet", "---\nen:\n  a: A\n", Some("t('a')\n"));
+    for args in [
+        vec!["health", "--quiet"],
+        vec!["health", "-q"],
+        vec!["health", "-q", "-f", "json"],
+    ] {
+        let (code, text) = p.run(&args);
+        assert_eq!(code, 0, "{args:?}: {text}");
+        assert_eq!(text, "", "{args:?}");
+    }
+}
+
+/// A failing `health --quiet` reports in full: the point of the flag is the
+/// silent pass, not a quieter failure.
+#[test]
+fn health_quiet_still_reports_what_it_found() {
+    let p = Project::new(
+        "healthquietdirty",
+        "---\nen:\n  a: A\n  b: B\n",
+        Some("t('a')\nt('nope')\n"),
+    );
+    let (code, text) = p.run(&["health", "-q"]);
+    assert_eq!(code, 1, "{text}");
+    assert!(text.starts_with("2 keys in 1 locales (en)"), "{text}");
+    assert!(text.contains("nope"), "{text}");
+
+    let (code, json) = p.run(&["health", "-q", "-f", "json"]);
+    assert_eq!(code, 1, "{json}");
+    assert!(json.contains("\"check\": \"health\""), "{json}");
+}
+
+/// `--quiet` hides a passing report, never a tool failure.
+#[test]
+fn health_quiet_still_refuses_an_empty_data_set() {
+    let p = Project::new("healthquietempty", "en: {}\n", Some("t('a')\n"));
+    let (code, text) = p.run(&["health", "-q"]);
+    assert_eq!(code, 2);
+    assert!(text.contains("no keys detected"), "{text}");
+}
