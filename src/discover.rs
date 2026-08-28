@@ -13,8 +13,6 @@ use std::path::{Path, PathBuf};
 /// A file with no hit cannot hold a translation call, so it is never parsed.
 const NEEDLES: &[&str] = &["t(", "t ", "t!", "translate", "I18n.", "i18n-tasks-use"];
 
-/// Reads one source file, or `None` when it cannot be read.
-///
 /// The single place a scanned file is read. The prefilter and the parse share
 /// these bytes, so a candidate costs one `read` syscall and one copy.
 pub fn read_source(path: &Path) -> Option<Vec<u8>> {
@@ -44,7 +42,6 @@ pub mod read_log {
             .push(path.to_path_buf());
     }
 
-    /// How many reads have happened under `root`, over the whole process.
     pub fn count_under(root: &Path) -> usize {
         log()
             .lock()
@@ -91,7 +88,7 @@ impl Finder {
         })
     }
 
-    /// The candidate files, in sorted order: everything the globs admit.
+    /// Returns sorted candidates admitted by the globs.
     ///
     /// The needle prefilter is *not* applied here. It needs the file's bytes,
     /// and so does the scan, so both read once in `UsedKeys::scan` and ask
@@ -115,8 +112,6 @@ impl Finder {
         files
     }
 
-    /// True when the file's bytes hold a needle, so it may hold a translation
-    /// call and has to be parsed.
     pub fn prefilter_matches(&self, bytes: &[u8]) -> bool {
         self.prefilter.is_match(bytes)
     }
@@ -140,8 +135,7 @@ impl Finder {
         });
     }
 
-    /// The include/exclude decision for one file, shared by the walk and by a
-    /// `search.paths` entry that names a file rather than a directory.
+    /// Applies the same rules to walked files and files named in `search.paths`.
     fn consider(&self, path: PathBuf, out: &mut Vec<PathBuf>) {
         let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
             return;
@@ -353,7 +347,6 @@ mod tests {
     #[test]
     fn a_file_named_in_search_paths_obeys_the_same_rules() {
         let root = project("named-file");
-        // Named directly: found.
         assert_eq!(
             found(&root, "search:\n  paths: [a/b/a.rb]\n"),
             vec!["a/b/a.rb"]
@@ -366,7 +359,6 @@ mod tests {
         );
         // A hidden file is not, because its own basename opens with a dot.
         assert!(found(&root, "search:\n  paths: ['.dotfile.rb']\n").is_empty());
-        // Named directly but excluded.
         assert!(
             found(
                 &root,
@@ -374,7 +366,6 @@ mod tests {
             )
             .is_empty()
         );
-        // Named directly but outside `only`.
         assert!(found(&root, "search:\n  paths: [a/b/a.rb]\n  only: ['a/a/**']\n").is_empty());
         let _ = std::fs::remove_dir_all(&root);
     }

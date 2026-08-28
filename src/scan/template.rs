@@ -1,5 +1,4 @@
-//! The regex scanner: Haml, Slim, JS, TS, and every extension that is not `.rb`
-//! or `.erb`.
+//! Regex scanner for all files except Ruby and ERB.
 //!
 //! ref: lib/i18n/tasks/scanners/pattern_scanner.rb
 //! ref: lib/i18n/tasks/scanners/pattern_with_scope_scanner.rb
@@ -80,7 +79,6 @@ static LITERAL_RE: LazyLock<Regex> = LazyLock::new(|| {
 
 pub fn scan(bytes: &[u8], path: &Path, cfg: &ScanConfig) -> FileScan {
     let index = LineIndex::new(bytes);
-    // One allocation for the file, cloned into every occurrence it produces.
     let shared: Arc<Path> = Arc::from(path);
     let ext = path
         .extension()
@@ -286,7 +284,7 @@ fn prev_char(bytes: &[u8], offset: usize) -> Option<char> {
         return None;
     }
     let mut start = offset - 1;
-    // Walk back over UTF-8 continuation bytes.
+    // Find the leading byte so the slice contains one complete UTF-8 character.
     while start > 0 && bytes[start] & 0xC0 == 0x80 {
         start -= 1;
     }

@@ -8,9 +8,7 @@
 //! `node.derive` (`data/tree/traversal.rb:93-128`), which is 2.04 s of a
 //! 5.5 s `unused` run.
 //!
-//! This module holds the locale trees and the read itself. The two questions
-//! that come before it are next door: `glob` turns a pattern into the paths
-//! that exist, and `locale_path` says which locale a path names.
+//! `glob` finds paths and `locale_path` resolves their locales.
 
 mod glob;
 mod locale_path;
@@ -33,9 +31,7 @@ pub enum Value {
     Str(String),
     Nil,
     Bool(bool),
-    /// The scalar as written, for a number or any other plain scalar.
     Plain(String),
-    /// A YAML sequence. The gem treats a sequence as a leaf value.
     Seq(Vec<Value>),
     /// A mapping nested inside a sequence. The flattener never produces one at
     /// the top of a leaf, because it walks into every mapping, so this only
@@ -89,7 +85,6 @@ impl Value {
 
 #[derive(Debug, Clone)]
 pub struct Leaf {
-    /// The dotted key, without the locale.
     pub key: String,
     pub value: Value,
     /// Number of key levels, which is what `forest_stats` calls a segment.
@@ -103,7 +98,6 @@ pub struct Leaf {
 }
 
 impl Leaf {
-    /// The real key segments.
     pub fn segments(&self) -> Vec<&str> {
         match &self.odd_segments {
             Some(segs) => segs.iter().map(AsRef::as_ref).collect(),
@@ -176,7 +170,6 @@ impl LocaleTree {
         self.interior.contains(key)
     }
 
-    /// Leaves sorted by key, for deterministic reports.
     pub fn sorted_keys(&self) -> Vec<&Leaf> {
         let mut out: Vec<&Leaf> = self.leaves.iter().collect();
         out.sort_by(|a, b| a.key.cmp(&b.key));
@@ -314,8 +307,6 @@ impl Store {
     }
 }
 
-/// One tree per locale, plus the warnings the reads produced.
-///
 /// The locales share nothing, so they are read in parallel. Determinism is the
 /// constraint — `tests/jobs.rs` asserts every command is byte-identical at
 /// `--jobs 1`, `2`, `8`, `16` and the default — so each locale collects its own
@@ -483,8 +474,7 @@ fn to_value(node: &Node, path: &Path, in_sequence: bool) -> Result<Value, String
             }
             Ok(Value::Seq(out))
         }
-        // Only reachable under a sequence, because `flatten` walks into every
-        // mapping it meets on the way down.
+        // `flatten` handles other mappings before this conversion.
         Node::Map { entries, .. } => {
             let mut out = Vec::with_capacity(entries.len());
             for (k, v) in entries {
