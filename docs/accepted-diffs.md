@@ -698,3 +698,17 @@ the parent and removes the complete plural node, including the protected child.
 This tool collapses only when every child in the locale data is unused, so it
 removes only the unused child. Parent selection never expands the removal set
 to protected data.
+
+## 32. `health --quiet` — a flag the gem does not have
+
+**Gem.** `health` takes the locale list and the output format only. It always
+prints the statistics header and all five check reports, whatever the verdict.
+
+**Here.** `-q`/`--quiet` prints nothing when every check passes, in text and in
+JSON form alike. This makes `health` usable as a pre-commit or pre-push hook,
+where a clean run must stay silent.
+
+A run that finds something reports in full: the flag suppresses the passing
+report, not the failing one. It also suppresses no warning and no tool failure
+— an unreadable config or an empty data set still says so on stderr and still
+exits 2. Exit codes are unchanged.

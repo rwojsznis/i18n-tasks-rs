@@ -17,7 +17,6 @@
 //! See blocker B2. So the pattern compiles to a small backtracking program
 //! instead, run directly over the bytes of the dotted key.
 
-/// One instruction of the compiled pattern program.
 #[derive(Debug, Clone)]
 enum Inst {
     /// Literal bytes. A `.` inside is a segment separator, matched literally.
@@ -28,7 +27,6 @@ enum Inst {
     PartialSeg,
     /// `:` — exactly one whole segment, both boundaries asserted.
     WholeSeg,
-    /// Try each target program counter in order.
     Split(Box<[usize]>),
     Jmp(usize),
     CapStart(usize),
@@ -37,7 +35,6 @@ enum Inst {
     Match,
 }
 
-/// A single compiled key pattern.
 #[derive(Debug, Clone)]
 pub struct Pattern {
     prog: Vec<Inst>,
@@ -48,7 +45,7 @@ pub struct Pattern {
     pub source: String,
 }
 
-/// A half-open byte range inside the key, for one `{...}` capture group.
+/// Half-open byte ranges for `{...}` capture groups.
 pub type Captures = Vec<Option<(usize, usize)>>;
 
 /// Counts `Pattern::compile` calls, so a test can pin that a caller compiles
@@ -104,7 +101,6 @@ impl Pattern {
         }
     }
 
-    /// Runs one instruction, with the dead-state memo in front of it.
     fn run(&self, pc: usize, s: &[u8], pos: usize, caps: &mut Captures, memo: &mut Memo) -> bool {
         if memo.is_dead(pc, pos) {
             return false;
@@ -150,8 +146,7 @@ impl Pattern {
                 }
                 false
             }
-            // The lookbehind and lookahead leave exactly one candidate: the
-            // whole segment starting at `pos`.
+            // The gem's lookarounds restrict this to the whole segment at `pos`.
             Inst::WholeSeg => {
                 if pos != 0 && s[pos - 1] != b'.' {
                     return false;
@@ -217,7 +212,6 @@ impl Pattern {
 /// costs more than it saves. Failures before the table exists are simply not
 /// recorded, which prunes less but decides nothing differently.
 struct Memo {
-    /// `key.len() + 1`, because `pos` may sit one past the last byte.
     stride: usize,
     cells: usize,
     failed: Vec<bool>,
@@ -254,7 +248,6 @@ impl Memo {
     }
 }
 
-/// A list of patterns. Matches when any member matches.
 #[derive(Debug, Clone, Default)]
 pub struct PatternSet {
     pats: Vec<Pattern>,
@@ -279,7 +272,6 @@ impl PatternSet {
         self.pats.iter().any(|p| p.is_match(key))
     }
 
-    /// The first matching pattern together with its captures.
     pub fn first_match(&self, key: &str) -> Option<(&Pattern, Captures)> {
         self.pats
             .iter()

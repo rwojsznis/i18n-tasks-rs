@@ -1,13 +1,9 @@
-//! The generated config file, and the report for the terminal.
-//!
-//! Both read a [`Detected`] and say the same things in two registers: the file
-//! documents itself for whoever opens it later, and the report tells the person
-//! who ran the command what was found.
+//! Generated config and terminal report rendering.
 
 use super::{Detected, Generated, Verification};
 use std::path::Path;
 
-/// The generated file. `verified` is `None` for the draft that produces it.
+/// Renders the config. `verified` is absent while the draft is verified.
 pub(super) fn render(d: &Detected, verified: Option<&Verification>) -> String {
     let mut out = String::new();
     out.push_str("# i18n-tasks-rs configuration.\n#\n");
@@ -140,7 +136,6 @@ fn quoted(path: &str) -> String {
     }
 }
 
-/// One note, wrapped into comment lines that stay inside 80 columns.
 fn wrap_comment(note: &str) -> String {
     let mut out = String::new();
     let mut line = String::from("#   ");
@@ -158,7 +153,6 @@ fn wrap_comment(note: &str) -> String {
     out
 }
 
-/// The report for the terminal.
 pub fn to_text(g: &Generated, to: &Path, written: bool) -> String {
     let d = &g.detected;
     let mut s = String::new();
@@ -220,10 +214,7 @@ pub fn to_text(g: &Generated, to: &Path, written: bool) -> String {
 mod tests {
     use super::*;
 
-    /// A note is the only free text in the generated file, so the wrap is the
-    /// only thing keeping the header inside 80 columns. Every line has to stay
-    /// a comment, too: a wrapped line that lost its `#` is a config the tool
-    /// then refuses to read.
+    /// Wrapped notes must remain valid YAML comments within 80 columns.
     #[test]
     fn a_note_wraps_into_comment_lines_that_stay_in_80_columns() {
         let note = "no locale files under config/locales, locales, app/locales. \
@@ -248,9 +239,7 @@ mod tests {
         assert_eq!(wrap_comment("short enough"), "#   short enough\n");
     }
 
-    /// Every generated path starts with the locale directory, so none of them
-    /// needs quoting. The rule is here for the one that would: a `data.read`
-    /// beginning with `*` is a YAML alias.
+    /// A leading `*` must be quoted because YAML treats it as an alias.
     #[test]
     fn a_path_is_quoted_only_when_yaml_needs_it() {
         for plain in [

@@ -1,4 +1,4 @@
-//! Routers: they decide which file each key is written to.
+//! Routes keys to locale files.
 //!
 //! ref: lib/i18n/tasks/data/router/pattern_router.rb
 //! ref: lib/i18n/tasks/data/router/conservative_router.rb
@@ -10,7 +10,6 @@ use crate::pattern::Pattern;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-/// One destination file and the keys that belong in it.
 #[derive(Debug)]
 pub struct Destination {
     pub path: PathBuf,
@@ -18,14 +17,11 @@ pub struct Destination {
     pub keys: Vec<String>,
 }
 
-/// The compiled `data.write` rules.
-///
 /// A bare path entry is the same as `['*', path]`, which is what
 /// `compile_routes` does.
 #[derive(Debug)]
 pub struct PatternRouter {
     routes: Vec<(Pattern, String)>,
-    /// For the error message on an unroutable key.
     sources: Vec<String>,
 }
 
@@ -98,8 +94,6 @@ fn substitute_captures(path: &str, key: &str, caps: &crate::pattern::Captures) -
             i += 2;
             continue;
         }
-        // See `config::interpolate_locale`: the `else` arm restates the loop
-        // condition.
         let Some(ch) = path[i..].chars().next() else {
             break;
         };
@@ -130,7 +124,6 @@ pub fn replace_locale(path: &str, from: &str, to: &str) -> String {
             i += from.len();
             continue;
         }
-        // See `config::interpolate_locale`.
         let Some(ch) = path[i..].chars().next() else {
             break;
         };
@@ -140,7 +133,7 @@ pub fn replace_locale(path: &str, from: &str, to: &str) -> String {
     out
 }
 
-/// The conservative router: a key stays in the file it came from.
+/// Keeps existing keys in their source files.
 ///
 /// ref: lib/i18n/tasks/data/router/conservative_router.rb
 ///
@@ -174,7 +167,6 @@ impl<'a> ConservativeRouter<'a> {
                 return Ok(PathBuf::from(rewritten));
             }
         }
-        // A genuinely new key falls through to the pattern router.
         self.fallback.route_key(locale, key)
     }
 }
@@ -235,7 +227,7 @@ pub fn route_filtered(
         groups.entry(path).or_default().push(leaf.key.clone());
     }
 
-    // Sorted, so neither the report nor the write order depends on hashing.
+    // Keep reports and writes independent of hash iteration order.
     let mut out: Vec<Destination> = groups
         .into_iter()
         .map(|(path, keys)| Destination { path, keys })
@@ -290,7 +282,6 @@ mod tests {
         );
     }
 
-    /// See `config::interpolate_locale`: two of the byte-scan loops are here.
     #[test]
     fn a_multi_byte_path_survives_both_rewrites() {
         assert_eq!(

@@ -49,8 +49,6 @@ pub enum IgnoreType {
     InconsistentInterpolations,
 }
 
-/// Either a flat list or a per-locale map.
-///
 /// ref: lib/i18n/tasks/ignore_keys.rb:7-30
 #[derive(Debug, Clone, Default)]
 pub enum IgnoreSpec {
@@ -132,7 +130,6 @@ pub struct Config {
     /// A stable digest of the resolved config, reported under `--format json`
     /// so a differential run can prove both tools read the same settings.
     pub digest: String,
-    /// Directory the config paths are relative to.
     pub root: PathBuf,
 }
 
@@ -192,7 +189,6 @@ impl Config {
     /// YAML mapping, names a setting this port does not have, or gives a
     /// setting a value of the wrong kind.
     pub fn parse(src: &str, path: &Path, root: PathBuf) -> Result<Config, String> {
-        // Blocker B3: no code execution, ever.
         if src.contains("<%") {
             return Err(format!(
                 "{}: ERB is not supported. This config format is plain YAML and never \
@@ -320,7 +316,7 @@ impl Config {
     }
 
     fn compute_digest(&self) -> String {
-        // A stable order, so the digest does not depend on file layout.
+        // Keep the digest independent of file layout.
         let mut fields: BTreeMap<&str, String> = BTreeMap::new();
         fields.insert("base_locale", self.base_locale.clone());
         fields.insert("locales", format!("{:?}", self.locales));
