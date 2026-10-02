@@ -57,7 +57,11 @@ static CALL_RE: LazyLock<Regex> = LazyLock::new(|| {
         (?:
           \s* , \s*
           (?: :scope \s* => \s* | scope: \s* )
-          (?P<scope> \[ [^\n)%\#]* \] | [^\n)%\#,]* )
+          (?P<scope>
+              % [iIwW] (?: \[ [^\n\]]* \] | \( [^\n)]* \) | \{ [^\n}]* \} )
+            | \[ [^\n)%\#]* \]
+            | [^\n)%\#,]*
+          )
         )?
         "#,
     )
@@ -227,6 +231,7 @@ fn match_to_key(
     // read it.
     let scope = match scope {
         Some(scope) if scope.trim().is_empty() => return Err(OpaqueScope),
+        Some(scope) if scope.starts_with('%') => percent_array(scope).ok_or(OpaqueScope)?.join("."),
         Some(scope) => extract_scope_parts(scope).ok_or(OpaqueScope)?.join("."),
         None => String::new(),
     };
@@ -322,6 +327,17 @@ fn extract_scope_parts(s: &str) -> Option<Vec<String>> {
         consume_literal(&mut acc, &mut literals)?;
     }
     Some(literals)
+}
+
+/// `%i[a b]`, `%w(a b)` and the other delimiters `CALL_RE` accepts. An
+/// interpolation in `%I` or `%W` returns `None`.
+fn percent_array(s: &str) -> Option<Vec<String>> {
+    let interpolating = matches!(s.as_bytes().get(1), Some(b'I' | b'W'));
+    let body = s.get(3..s.len().checked_sub(1)?)?;
+    if interpolating && body.contains("#{") {
+        return None;
+    }
+    Some(body.split_whitespace().map(str::to_string).collect())
 }
 
 fn consume_literal(acc: &mut String, literals: &mut Vec<String>) -> Option<()> {
@@ -576,8 +592,8 @@ mod tests {
             "= t :key, scope: [:a, sub(1)]",
             "= t :key, scope: [:a, h.c(1)]",
             "= t :key, scope: [:a, \"x#{b}\"]",
-            // `CALL_RE` stops at `%` and `#`, so the scope arrives empty.
-            "= t :key, scope: %i[a b]",
+            // `CALL_RE` stops at `%`, so the scope arrives empty.
+            "= t :key, scope: %(a b)",
             "= t :key, scope: [:x, [:y]]",
             "= t :key, scope: (a)",
             "= t key, scope: (a)",
@@ -609,6 +625,19 @@ mod tests {
         // A custom SlimMultilineScanner exists for exactly this.
         assert_eq!(keys("= t(\\\n  'multiline.key')"), ["multiline.key"]);
         assert_eq!(keys("= t (\n  'spaced.key')"), ["spaced.key"]);
+    }
+
+    /// A `%i[]` or `%w[]` scope is static, as it is to the Prism scanner. An
+    /// interpolation in `%I[]` or `%W[]` makes the call opaque.
+    #[test]
+    fn a_percent_array_scope_is_static() {
+        assert_eq!(keys("= t :key, scope: %i[a b]"), ["a.b.key"]);
+        assert_eq!(keys("= t :key, scope: %w(a b)"), ["a.b.key"]);
+        assert_eq!(keys("= t :key, scope: %I{a b}"), ["a.b.key"]);
+        assert_eq!(keys("= t(:key, scope: %W[a  b], default: x)"), ["a.b.key"]);
+        assert_eq!(keys("= t :key, scope: %i[]"), ["key"]);
+        assert_eq!(opaque("= t :key, scope: %I[a #{b}]"), 1);
+        assert_eq!(opaque("= t :key, scope: %i[a b"), 1);
     }
 
     #[test]
