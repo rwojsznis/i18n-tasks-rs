@@ -285,6 +285,7 @@ fn strip_literal(literal: &str) -> String {
 fn extract_scope_parts(s: &str) -> Option<Vec<String>> {
     let mut literals: Vec<String> = Vec::new();
     let mut in_brackets = false;
+    let mut closed = false;
     let mut acc = String::new();
     for c in s.chars() {
         match c {
@@ -294,7 +295,10 @@ fn extract_scope_parts(s: &str) -> Option<Vec<String>> {
                 }
                 in_brackets = true;
             }
-            ']' => break,
+            ']' => {
+                closed = true;
+                break;
+            }
             ',' => {
                 consume_literal(&mut acc, &mut literals)?;
                 if !in_brackets {
@@ -305,6 +309,13 @@ fn extract_scope_parts(s: &str) -> Option<Vec<String>> {
             ' ' => {}
             _ => return None,
         }
+    }
+    // `CALL_RE` stops the scope at `)` and `#`, so `[:a, f(1)]` arrives as
+    // `[:a, f(1`, or as `[:a` once the fallback branch stops at the comma.
+    // Reading the part before the cut would make a static key from a dynamic
+    // scope.
+    if in_brackets && !closed {
+        return None;
     }
     if !acc.is_empty() {
         consume_literal(&mut acc, &mut literals)?;
@@ -557,6 +568,11 @@ mod tests {
         for src in [
             "= t :key, scope: a",
             "= t :key, scope: [a]",
+            // The scope regex stops at `)` and `#`, so these arrays are cut
+            // short and must not become a static `a.key`.
+            "= t :key, scope: [:a, sub(1)]",
+            "= t :key, scope: [:a, h.c(1)]",
+            "= t :key, scope: [:a, \"x#{b}\"]",
             "= t :key, scope: []",
             "= t :key, scope: [:x, [:y]]",
             "= t :key, scope: (a)",
