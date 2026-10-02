@@ -115,9 +115,14 @@ pub fn scan(bytes: &[u8], path: &Path, cfg: &ScanConfig) -> FileScan {
 
         // ref: pattern_scanner.rb:45 — the comment check comes before the key
         // is resolved, and it tests the whole line.
-        if is_comment_line(ext, index.line_text(bytes, call_pos)) {
+        let line = line_kind(ext, index.line_text(bytes, call_pos));
+        if line == LineKind::Comment {
             continue;
         }
+        // A magic comment names keys, so only a static key counts, as in
+        // `magic.rs`. An opaque call made by a comment would block
+        // `remove-unused` for no reason.
+        let magic = line == LineKind::Magic;
         let (line_num, line_pos) = index.locate(call_pos);
         let occ = |raw_key: String, candidate_keys: Vec<String>| Occurrence {
             path: Arc::clone(&shared),
@@ -133,11 +138,16 @@ pub fn scan(bytes: &[u8], path: &Path, cfg: &ScanConfig) -> FileScan {
             Ok(None) => continue,
             // Blocker B5: never treat an opaque call as "no keys used".
             Err(OpaqueScope) => {
-                out.opaque.push(occ(strip_literal(&arg), Vec::new()));
+                if !magic {
+                    out.opaque.push(occ(strip_literal(&arg), Vec::new()));
+                }
                 continue;
             }
         };
         if scoped.scope.contains('*') {
+            if magic {
+                continue;
+            }
             // `valid_key` rejects `*`, so only the key half is checked.
             if !valid_key(&scoped.key) {
                 continue;
@@ -158,7 +168,7 @@ pub fn scan(bytes: &[u8], path: &Path, cfg: &ScanConfig) -> FileScan {
         } else {
             key
         };
-        if !valid_key(&key) {
+        if !valid_key(&key) || (magic && key.contains("#{")) {
             continue;
         }
         let occ = occ(strip_literal(&arg), vec![key.clone()]);
@@ -382,13 +392,21 @@ fn prev_char(bytes: &[u8], offset: usize) -> Option<char> {
         .and_then(|s| s.chars().next())
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LineKind {
+    Code,
+    Comment,
+    /// A comment that carries `i18n-tasks-use`.
+    Magic,
+}
+
 /// ref: pattern_scanner.rb:16-24 `IGNORE_LINES`
 ///
 /// A comment line is skipped unless it carries a magic comment. The gem writes
 /// this as a negative lookahead, `(?!\si18n-tasks-use)`; restructuring it that
 /// way needs no lookaround. `.jsx`, `.ts` and `.tsx` are absent from the gem's
 /// table, so a `//` comment in one of those is scanned, here as there.
-fn is_comment_line(ext: &str, line: &[u8]) -> bool {
+fn line_kind(ext: &str, line: &[u8]) -> LineKind {
     let markers: &[&str] = match ext {
         "coffee" | "opal" => &["#"],
         "es6" | "js" => &["//"],
@@ -396,7 +414,7 @@ fn is_comment_line(ext: &str, line: &[u8]) -> bool {
         "slim" => &["-#", "/"],
         // The gem's table has an `erb` entry, but its regex scanner never sees
         // an `.erb` file: `ErbAstScanner` handles those, and so does `erb.rs`.
-        _ => return false,
+        _ => return LineKind::Code,
     };
     let line = String::from_utf8_lossy(line);
     let trimmed = line.trim_start();
@@ -408,17 +426,25 @@ fn is_comment_line(ext: &str, line: &[u8]) -> bool {
         let keeps_magic = rest
             .strip_prefix(char::is_whitespace)
             .is_some_and(|rest| rest.starts_with("i18n-tasks-use"));
-        return !keeps_magic;
+        return if keeps_magic {
+            LineKind::Magic
+        } else {
+            LineKind::Comment
+        };
     }
     for marker in markers {
         if let Some(rest) = trimmed.strip_prefix(marker) {
             let keeps_magic = rest
                 .strip_prefix(char::is_whitespace)
                 .is_some_and(|r| r.starts_with("i18n-tasks-use"));
-            return !keeps_magic;
+            return if keeps_magic {
+                LineKind::Magic
+            } else {
+                LineKind::Comment
+            };
         }
     }
-    false
+    LineKind::Code
 }
 
 /// ref: pattern_scanner.rb:73 `VALID_KEY_RE_DYNAMIC`, which is the non-strict
@@ -638,6 +664,36 @@ mod tests {
         assert_eq!(keys("= t :key, scope: %i[]"), ["key"]);
         assert_eq!(opaque("= t :key, scope: %I[a #{b}]"), 1);
         assert_eq!(opaque("= t :key, scope: %i[a b"), 1);
+    }
+
+    /// A magic comment names keys. A dynamic scope or key in one adds nothing,
+    /// the same as in `.rb` and `.erb` files: an opaque call made by a
+    /// comment would block `remove-unused` for no reason.
+    #[test]
+    fn a_magic_comment_takes_only_a_static_key() {
+        for (src, ext) in [
+            ("/ i18n-tasks-use t(:key, scope: [:a, x])", "slim"),
+            ("/ i18n-tasks-use t(:key, scope: whatever)", "slim"),
+            ("/ i18n-tasks-use t(:key, scope: f(1))", "slim"),
+            ("/ i18n-tasks-use t(\"a.#{b}\")", "slim"),
+            ("-# i18n-tasks-use t(:key, scope: whatever)", "haml"),
+            ("-# i18n-tasks-use t(:key, scope: [:a, x])", "haml"),
+        ] {
+            let out = scan(
+                src.as_bytes(),
+                &PathBuf::from(format!("app/views/x/index.html.{ext}")),
+                &cfg(),
+            );
+            assert!(out.keys.is_empty(), "{src}: {:?}", out.keys);
+            assert!(out.patterns.is_empty(), "{src}: {:?}", out.patterns);
+            assert!(out.opaque.is_empty(), "{src}: {:?}", out.opaque);
+        }
+        assert_eq!(
+            keys("/ i18n-tasks-use t(:key, scope: [:a, :b])"),
+            ["a.b.key"]
+        );
+        // Outside a comment the same call is still a pattern.
+        assert_eq!(patterns("= t(:key, scope: [:a, x])"), ["a.*.key"]);
     }
 
     #[test]
