@@ -438,9 +438,8 @@ value, at the position of the first key. The reader used to keep both, so
 and warns with both line numbers. `migrate-config` refuses such a file.
 
 With overlapping `data.read` globs, the reader kept a file at its first
-position, so another file's copy of a key won. The gem reads the file once
-per glob, so its last read wins, and Rails sorts the same files. The reader
-now keeps each file at its last position.
+position, so another file's copy of a key won, and `normalize` deleted the
+value Rails reads. See 33.
 
 ## 18. The emitter never folds a line
 
@@ -742,3 +741,20 @@ A run that finds something reports in full: the flag suppresses the passing
 report, not the failing one. It also suppresses no warning and no tool failure
 — an unreadable config or an empty data set still says so on stderr and still
 exits 2. Exit codes are unchanged.
+
+## 33. Locale files are read in sorted path order — bug fix
+
+**Gem.** `file_system_base.rb#read_locale` reads a file once per `data.read`
+glob that matches it, in glob order, and the last read wins. With
+`%{locale}.yml` and then `*%{locale}.yml`, `en.yml` is read last. With the
+globs the other way round, it is also read last.
+
+**Rails.** The default `config.i18n.load_path` is
+`config/locales/**/*.{rb,yml}`, sorted as strings. So `users.en.yml` is read
+after `en.yml`, whatever order the globs are in. When two files hold the same
+key, the gem and Rails can disagree, and `normalize` then keeps the copy Rails
+does not read.
+
+**Here.** Every file that a `data.read` glob matches is read once, in sorted
+path order, as Rails reads it. An app that adds its own paths to
+`config.i18n.load_path` can still differ.

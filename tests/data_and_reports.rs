@@ -121,24 +121,83 @@ fn overlapping_read_globs_are_deduplicated_and_merge_in_order() {
     assert!(tree.get("b").unwrap().path.ends_with("other.en.yml"));
 }
 
-/// The gem reads a file once per glob that matches it, so its last read wins:
-/// `en.yml`, `devise.en.yml`, `en.yml`. Rails sorts the same files, and also
-/// reads `en.yml` last.
+/// Rails reads every locale file in sorted path order, whatever order the
+/// globs are in, so the file that sorts last wins. Each case is checked with
+/// `Dir["config/locales/**/*.yml"].sort` and the i18n gem.
 #[test]
-fn a_file_matched_by_two_globs_takes_its_last_position() {
-    let p = Project::new("overlap-last");
-    p.write("config/locales/en.yml", "en:\n  k: from-en\n  a: A\n")
-        .write(
-            "config/locales/devise.en.yml",
-            "en:\n  k: from-devise\n  d: D\n",
-        );
-    let cfg = p.config(
-        "base_locale: en\nlocales: [en]\ndata:\n  read:\n    - config/locales/%{locale}.yml\n    - config/locales/*%{locale}.yml\n",
+fn files_are_read_in_sorted_path_order() {
+    /// Name, `data.read` globs, two files with their value of `k`, and the
+    /// value Rails reads.
+    type Case = (
+        &'static str,
+        &'static [&'static str],
+        [(&'static str, &'static str); 2],
+        &'static str,
     );
-    let store = Store::load(&cfg).unwrap();
-    let k = store.tree("en").unwrap().get("k").unwrap();
-    assert_eq!(k.value, Value::Str("from-en".into()));
-    assert!(k.path.ends_with("config/locales/en.yml"), "{:?}", k.path);
+    let cases: [Case; 7] = [
+        (
+            "handoff",
+            &["%{locale}.yml", "*%{locale}.yml"],
+            [("en.yml", "from-en"), ("devise.en.yml", "from-devise")],
+            "from-en",
+        ),
+        (
+            "reversed",
+            &["*%{locale}.yml", "%{locale}.yml"],
+            [("en.yml", "from-en"), ("users.en.yml", "from-users")],
+            "from-users",
+        ),
+        (
+            "three",
+            &["%{locale}.yml", "**/*.%{locale}.yml", "**/%{locale}.yml"],
+            [("en.yml", "from-en"), ("users.en.yml", "from-users")],
+            "from-users",
+        ),
+        (
+            "base-first",
+            &["base.%{locale}.yml", "*.%{locale}.yml"],
+            [("about.en.yml", "from-about"), ("base.en.yml", "from-base")],
+            "from-base",
+        ),
+        (
+            "gem-template",
+            &["%{locale}.yml", "**/*.%{locale}.yml"],
+            [("en.yml", "from-en"), ("admin.en.yml", "from-admin")],
+            "from-en",
+        ),
+        (
+            "dir-vs-dot",
+            &["**/%{locale}.yml", "*.%{locale}.yml"],
+            [("devise/en.yml", "from-dir"), ("devise.en.yml", "from-dot")],
+            "from-dir",
+        ),
+        (
+            "dot-slash",
+            &["%{locale}.yml", "./*%{locale}.yml"],
+            [("en.yml", "from-en"), ("zz.en.yml", "from-zz")],
+            "from-zz",
+        ),
+    ];
+    for (name, globs, files, expected) in cases {
+        let p = Project::new(&format!("order-{name}"));
+        for (file, value) in files {
+            p.write(
+                &format!("config/locales/{file}"),
+                &format!("en:\n  k: {value}\n"),
+            );
+        }
+        let read = globs
+            .iter()
+            .map(|g| format!("    - config/locales/{g}\n"))
+            .collect::<Vec<_>>()
+            .concat();
+        let cfg = p.config(&format!(
+            "base_locale: en\nlocales: [en]\ndata:\n  read:\n{read}"
+        ));
+        let store = Store::load(&cfg).unwrap();
+        let k = store.tree("en").unwrap().get("k").unwrap();
+        assert_eq!(k.value, Value::Str(expected.into()), "{name}");
+    }
 }
 
 #[test]

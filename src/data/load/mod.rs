@@ -351,21 +351,23 @@ fn normalize_locale_list(locales: &[String], base: &str) -> Vec<String> {
     out
 }
 
-/// The files of `patterns`, each at its last position.
+/// The files of `patterns`, each once, in the order Rails reads them.
 ///
-/// The gem reads a file once per glob that matches it, so the last read wins.
-/// A real-world config has two overlapping `data.read` globs, and the second
-/// matches every file the first does. Reading each file once, at its last
-/// position, gives the same result.
+/// Rails globs `config/locales/**/*.{rb,yml}` and sorts the paths as strings,
+/// whatever order the `data.read` globs are in. The gem instead reads a file
+/// once per glob that matches it, which is wrong when a narrow glob comes
+/// last. Accepted diff 33.
 fn read_order(cfg: &Config, locale: &str, patterns: &[String]) -> Vec<PathBuf> {
     let mut paths: Vec<PathBuf> = patterns
         .iter()
         .flat_map(|p| glob_paths(&cfg.root, &interpolate_locale(p, locale)))
         .collect();
-    let mut seen = HashSet::new();
-    paths.reverse();
-    paths.retain(|p| seen.insert(p.clone()));
-    paths.reverse();
+    paths.sort_by(|a, b| {
+        a.as_os_str()
+            .as_encoded_bytes()
+            .cmp(b.as_os_str().as_encoded_bytes())
+    });
+    paths.dedup();
     paths
 }
 
