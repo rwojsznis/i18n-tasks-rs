@@ -111,7 +111,7 @@ fn overlapping_read_globs_are_deduplicated_and_merge_in_order() {
         tree.get("b").unwrap().value,
         Value::Str("from other".into())
     );
-    // A later file wins, matching the gem's `reduce(:merge!)`.
+    // The file that sorts last wins, as in Rails. See accepted diff 33.
     assert_eq!(
         tree.get("shared").unwrap().value,
         Value::Str("other wins".into())
