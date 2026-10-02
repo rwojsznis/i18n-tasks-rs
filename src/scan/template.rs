@@ -114,9 +114,39 @@ pub fn scan(bytes: &[u8], path: &Path, cfg: &ScanConfig) -> FileScan {
         if is_comment_line(ext, index.line_text(bytes, call_pos)) {
             continue;
         }
-        let Some(key) = match_to_key(&arg, scope.as_deref(), path, cfg) else {
-            continue;
+        let (line_num, line_pos) = index.locate(call_pos);
+        let occ = |raw_key: String, candidate_keys: Vec<String>| Occurrence {
+            path: Arc::clone(&shared),
+            snippet: String::from_utf8_lossy(index.line_text(bytes, call_pos)).into_owned(),
+            pos: call_pos,
+            line_pos,
+            line_num,
+            raw_key,
+            candidate_keys,
         };
+        let scoped = match match_to_key(&arg, scope.as_deref(), path, cfg) {
+            Ok(Some(scoped)) => scoped,
+            Ok(None) => continue,
+            // Blocker B5: never treat an opaque call as "no keys used".
+            Err(OpaqueScope) => {
+                out.opaque.push(occ(strip_literal(&arg), Vec::new()));
+                continue;
+            }
+        };
+        if scoped.scope.contains('*') {
+            // `valid_key` rejects `*`, so only the key half is checked.
+            if !valid_key(&scoped.key) {
+                continue;
+            }
+            let mut pattern = format!("{}.{}", scoped.scope, replace_interpolations(&scoped.key));
+            if pattern.ends_with('.') {
+                pattern.push_str("*:");
+            }
+            let occ = occ(strip_literal(&arg), vec![pattern.clone()]);
+            push_pattern(&mut out, pattern, occ);
+            continue;
+        }
+        let key = scoped.full();
         // ref: pattern_scanner.rb:50 — a key built up from a prefix ending in a
         // dot becomes a single-segment wildcard.
         let key = if key.ends_with('.') {
@@ -127,33 +157,27 @@ pub fn scan(bytes: &[u8], path: &Path, cfg: &ScanConfig) -> FileScan {
         if !valid_key(&key) {
             continue;
         }
-        let (line_num, line_pos) = index.locate(call_pos);
-        let occ = Occurrence {
-            path: Arc::clone(&shared),
-            snippet: String::from_utf8_lossy(index.line_text(bytes, call_pos)).into_owned(),
-            pos: call_pos,
-            line_pos,
-            line_num,
-            raw_key: strip_literal(&arg),
-            candidate_keys: vec![key.clone()],
-        };
+        let occ = occ(strip_literal(&arg), vec![key.clone()]);
         push_key(&mut out, key, occ);
     }
     out
+}
+
+fn push_pattern(out: &mut FileScan, pattern: String, occ: Occurrence) {
+    if ruby::is_all_wildcard(&pattern) {
+        // ref: used_keys.rb#expr_key_re `ignore_pattern_re` — a pattern with
+        // no static content would mark every key used.
+        out.opaque.push(occ);
+    } else {
+        out.patterns.push((pattern, occ));
+    }
 }
 
 /// Blocker B5, and the gem's `used_in_expr?` for the same input: a key with an
 /// interpolation in it is a pattern, not a key.
 fn push_key(out: &mut FileScan, key: String, occ: Occurrence) {
     if key.contains("#{") {
-        let pattern = replace_interpolations(&key);
-        if ruby::is_all_wildcard(&pattern) {
-            // ref: used_keys.rb#expr_key_re `ignore_pattern_re` — a pattern with
-            // no static content would mark every key used.
-            out.opaque.push(occ);
-        } else {
-            out.patterns.push((pattern, occ));
-        }
+        push_pattern(out, replace_interpolations(&key), occ);
         return;
     }
     // A key that came from a `foo.` prefix keeps the gem's literal form, and
@@ -168,22 +192,52 @@ fn push_key(out: &mut FileScan, key: String, occ: Occurrence) {
     out.keys.push((key, occ));
 }
 
+/// A scope with no literal part. The gem drops the call; here the call is
+/// opaque.
+struct OpaqueScope;
+
+struct ScopedKey {
+    /// Empty when the call has no `scope:`.
+    scope: String,
+    key: String,
+}
+
+impl ScopedKey {
+    fn full(self) -> String {
+        if self.scope.is_empty() {
+            self.key
+        } else {
+            format!("{}.{}", self.scope, self.key)
+        }
+    }
+}
+
 /// ref: pattern_with_scope_scanner.rb:23-34
-fn match_to_key(arg: &str, scope: Option<&str>, path: &Path, cfg: &ScanConfig) -> Option<String> {
-    let key = absolute_key(&strip_literal(arg), path, cfg)?;
+fn match_to_key(
+    arg: &str,
+    scope: Option<&str>,
+    path: &Path,
+    cfg: &ScanConfig,
+) -> Result<Option<ScopedKey>, OpaqueScope> {
+    let Some(key) = absolute_key(&strip_literal(arg), path, cfg) else {
+        return Ok(None);
+    };
     match scope {
         Some(scope) => {
-            let parts = extract_literal_or_array_of_literals(scope)?;
-            if parts.is_empty() {
-                return None;
+            let scope = extract_scope_parts(scope).ok_or(OpaqueScope)?.join(".");
+            if ruby::is_all_wildcard(&scope) {
+                return Err(OpaqueScope);
             }
-            Some(format!("{}.{}", parts.join("."), key))
+            Ok(Some(ScopedKey { scope, key }))
         }
         // Without a scope, an expression argument is dropped: only a literal
         // starts with something other than a word character. Ruby's `\w` is
         // ASCII-only. ref: pattern_with_scope_scanner.rb:32
-        None if arg.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_') => None,
-        None => Some(key),
+        None if arg.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_') => Ok(None),
+        None => Ok(Some(ScopedKey {
+            scope: String::new(),
+            key,
+        })),
     }
 }
 
@@ -222,11 +276,13 @@ fn strip_literal(literal: &str) -> String {
     literal.to_string()
 }
 
-/// ref: pattern_with_scope_scanner.rb:66-97
+/// ref: pattern_with_scope_scanner.rb:66-97 `extract_literal_or_array_of_literals`
 ///
-/// Returns `None` for anything that is not a literal or an array of literals,
-/// which drops the occurrence.
-fn extract_literal_or_array_of_literals(s: &str) -> Option<Vec<String>> {
+/// The gem accepts only literals. A plain expression such as `category` or
+/// `@x.y` is accepted here too, as `*`, so the key becomes a pattern (blocker
+/// B5). `*`, not `*:`, because a scope often holds a dotted path. Returns
+/// `None` for anything else.
+fn extract_scope_parts(s: &str) -> Option<Vec<String>> {
     let mut literals: Vec<String> = Vec::new();
     let mut in_brackets = false;
     let mut acc = String::new();
@@ -245,7 +301,7 @@ fn extract_literal_or_array_of_literals(s: &str) -> Option<Vec<String>> {
                     break;
                 }
             }
-            _ if is_valid_key_char(c) || c == '\'' || c == '"' || c == ':' => acc.push(c),
+            _ if is_valid_key_char(c) || matches!(c, '\'' | '"' | ':' | '@') => acc.push(c),
             ' ' => {}
             _ => return None,
         }
@@ -257,10 +313,13 @@ fn extract_literal_or_array_of_literals(s: &str) -> Option<Vec<String>> {
 }
 
 fn consume_literal(acc: &mut String, literals: &mut Vec<String>) -> Option<()> {
-    if !LITERAL_RE.is_match(acc.as_bytes()) {
+    if acc.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_' || c == '@') {
+        literals.push("*".to_string());
+    } else if LITERAL_RE.is_match(acc.as_bytes()) {
+        literals.push(strip_literal(acc));
+    } else {
         return None;
     }
-    literals.push(strip_literal(acc));
     acc.clear();
     Some(())
 }
@@ -411,6 +470,16 @@ mod tests {
         out.keys.into_iter().map(|(k, _)| k).collect()
     }
 
+    fn opaque(src: &str) -> usize {
+        scan(
+            src.as_bytes(),
+            &PathBuf::from("app/views/x/index.html.slim"),
+            &cfg(),
+        )
+        .opaque
+        .len()
+    }
+
     fn patterns(src: &str) -> Vec<String> {
         let out = scan(
             src.as_bytes(),
@@ -473,19 +542,33 @@ mod tests {
         );
     }
 
+    /// Blocker B5: a call with a dynamic scope uses keys, so it must not be
+    /// dropped. An expression in the scope can hold a dotted path, so it is
+    /// `*`; a scope with no literal part makes the call opaque.
     #[test]
-    fn drops_a_scope_that_is_not_a_literal() {
+    fn a_scope_that_is_not_a_literal_is_a_pattern_or_opaque() {
+        assert_eq!(
+            patterns("= t(:title, scope: [:products, category])"),
+            ["products.*.title"]
+        );
+        assert_eq!(patterns("= t :key, scope: [:x, @y.z]"), ["x.*.key"]);
+        assert_eq!(patterns("= t key, scope: [:x, y]"), ["x.*.*:"]);
+        assert_eq!(patterns("= t 'a.', scope: [:x, y]"), ["x.*.a.*:"]);
         for src in [
             "= t :key, scope: a",
-            "= t :key, scope: []",
             "= t :key, scope: [a]",
+            "= t :key, scope: []",
             "= t :key, scope: [:x, [:y]]",
             "= t :key, scope: (a)",
             "= t key, scope: (a)",
-            "= t key",
         ] {
             assert!(keys(src).is_empty(), "expected no key from {src}");
+            assert!(patterns(src).is_empty(), "expected no pattern from {src}");
+            assert_eq!(opaque(src), 1, "expected an opaque call from {src}");
         }
+        // No scope at all: an expression key is dropped, as in the gem.
+        assert_eq!(keys("= t key"), Vec::<String>::new());
+        assert_eq!(opaque("= t key"), 0);
     }
 
     // An expression argument with a literal scope is dynamic, so it is a

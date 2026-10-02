@@ -2,6 +2,7 @@
 //!
 //! ref: lib/i18n/tasks/scanners/prism_scanners/arguments_visitor.rb
 
+use super::key::is_all_wildcard;
 use ruby_prism as pr;
 
 /// ref: arguments_visitor.rb
@@ -121,35 +122,57 @@ fn interpolated_pattern(parts: &pr::NodeList) -> String {
     out
 }
 
+/// A scope that gives no usable key prefix. The call still uses keys, so the
+/// caller records it as opaque.
 pub(super) struct ScopeError;
 
+#[derive(Debug, PartialEq)]
+pub(super) struct KeyScope {
+    pub(super) text: String,
+    /// The text holds a wildcard, so the full key is a pattern.
+    pub(super) dynamic: bool,
+}
+
 /// ref: nodes.rb#scope (lines 166-182)
-pub(super) fn resolve_scope(kwargs: &[(String, ArgVal)]) -> Result<Option<String>, ScopeError> {
+///
+/// The gem drops the call when an entry is not a String or Symbol. Blocker B5
+/// forbids that. A variable, constant or call entry becomes `*`, not `*:`,
+/// because a scope often holds a dotted path such as `'admin.users'`.
+pub(super) fn resolve_scope(kwargs: &[(String, ArgVal)]) -> Result<Option<KeyScope>, ScopeError> {
     let Some((_, value)) = kwargs.iter().find(|(k, _)| k == "scope") else {
         return Ok(None);
     };
-    // `Array(value)` then "all entries are String or Symbol", so anything else
-    // is a ScopeError, which drops the occurrence.
-    let parts: Vec<String> = match value {
-        ArgVal::Str(s) => vec![s.clone()],
-        ArgVal::Arr(items) => {
-            let mut out = Vec::with_capacity(items.len());
-            for i in items {
-                match i {
-                    ArgVal::Str(s) => out.push(s.clone()),
-                    _ => return Err(ScopeError),
-                }
-            }
-            out
-        }
+    let items = match value {
+        ArgVal::Arr(items) => items.as_slice(),
+        ArgVal::Str(_) | ArgVal::Pattern(_) => std::slice::from_ref(value),
         _ => return Err(ScopeError),
     };
     // `Array(nil)` is empty, and an empty scope is a ScopeError. See PR #731:
     // a falsey scope and an absent scope are different cases.
-    if parts.is_empty() {
+    if items.is_empty() {
         return Err(ScopeError);
     }
-    Ok(Some(parts.join(".")))
+    let mut parts = Vec::with_capacity(items.len());
+    let mut dynamic = false;
+    for item in items {
+        match item {
+            ArgVal::Str(s) => parts.push(s.as_str()),
+            ArgVal::Pattern(p) => {
+                parts.push(p.as_str());
+                dynamic = true;
+            }
+            ArgVal::Unresolvable | ArgVal::Nil => {
+                parts.push("*");
+                dynamic = true;
+            }
+            ArgVal::Int | ArgVal::Arr(_) | ArgVal::Hash(_) => return Err(ScopeError),
+        }
+    }
+    let text = parts.join(".");
+    if is_all_wildcard(&text) {
+        return Err(ScopeError);
+    }
+    Ok(Some(KeyScope { text, dynamic }))
 }
 
 #[cfg(test)]

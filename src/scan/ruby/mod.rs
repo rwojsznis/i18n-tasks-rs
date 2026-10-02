@@ -280,17 +280,41 @@ impl<'a> Visitor<'a> {
         let (args, kwargs) = process_arguments(node);
         let receiver_present = node.receiver().is_some();
 
-        // ref: nodes.rb#scope. A `ScopeError` drops the occurrence entirely.
-        let scope = match resolve_scope(&kwargs) {
-            Ok(s) => s,
-            Err(ScopeError) => return,
-        };
-
         let Some(first) = args.first() else { return };
         let loc = node.location();
+
+        // ref: nodes.rb#scope. The gem drops the call on a `ScopeError`.
+        // Blocker B5: never treat an opaque call as "no keys used".
+        let scope = match resolve_scope(&kwargs) {
+            Ok(s) => s,
+            Err(ScopeError) => {
+                if matches!(
+                    first,
+                    ArgVal::Str(_) | ArgVal::Pattern(_) | ArgVal::Unresolvable | ArgVal::Nil
+                ) {
+                    self.push_opaque(&loc);
+                }
+                return;
+            }
+        };
+        let scope_text = scope.as_ref().map(|s| s.text.as_str());
+
         match first {
+            // The key is static, but the scope is not, so the full key is a
+            // pattern. A trailing dot gets the same `*:` as below.
+            ArgVal::Str(key) if scope.as_ref().is_some_and(|s| s.dynamic) => {
+                let Some(resolved) = full_key(key, scope_text, ctx, receiver_present) else {
+                    return;
+                };
+                let occ = self.occurrence(&loc, key, &resolved);
+                let mut pat = resolved[0].clone();
+                if pat.ends_with('.') {
+                    pat.push_str("*:");
+                }
+                self.push_pattern(pat, occ);
+            }
             ArgVal::Str(key) => {
-                let Some(resolved) = full_key(key, scope.as_deref(), ctx, receiver_present) else {
+                let Some(resolved) = full_key(key, scope_text, ctx, receiver_present) else {
                     return;
                 };
                 let occ = self.occurrence(&loc, key, &resolved);
@@ -306,26 +330,32 @@ impl<'a> Visitor<'a> {
             }
             // Blocker B5.
             ArgVal::Pattern(pat) => {
-                let Some(resolved) = full_key(pat, scope.as_deref(), ctx, receiver_present) else {
+                let Some(resolved) = full_key(pat, scope_text, ctx, receiver_present) else {
                     return;
                 };
                 let occ = self.occurrence(&loc, pat, &resolved);
-                if is_all_wildcard(&resolved[0]) {
-                    // Too broad to be useful: it would mark every key used.
-                    self.out.opaque.push(occ);
-                } else {
-                    self.out.patterns.push((resolved[0].clone(), occ));
-                }
+                self.push_pattern(resolved[0].clone(), occ);
             }
             // Blocker B5: never treat an opaque call as "no keys used".
-            ArgVal::Unresolvable | ArgVal::Nil => {
-                let snippet = String::from_utf8_lossy(loc.as_slice()).into_owned();
-                let occ = self.occurrence(&loc, &snippet, &[]);
-                self.out.opaque.push(occ);
-            }
+            ArgVal::Unresolvable | ArgVal::Nil => self.push_opaque(&loc),
             // An integer, array or hash key resolves to nothing, as in the gem.
             _ => {}
         }
+    }
+
+    fn push_pattern(&mut self, pattern: String, occ: Occurrence) {
+        if is_all_wildcard(&pattern) {
+            // Too broad to be useful: it would mark every key used.
+            self.out.opaque.push(occ);
+        } else {
+            self.out.patterns.push((pattern, occ));
+        }
+    }
+
+    fn push_opaque(&mut self, loc: &pr::Location) {
+        let snippet = String::from_utf8_lossy(loc.as_slice()).into_owned();
+        let occ = self.occurrence(loc, &snippet, &[]);
+        self.out.opaque.push(occ);
     }
 
     // ---- magic comments ----
@@ -374,15 +404,17 @@ impl<'a> Visitor<'a> {
             if call.receiver_present && !call.receiver_is_i18n {
                 continue;
             }
+            // A magic comment names keys, so only a static scope counts.
             let scope = match resolve_scope(&call.kwargs) {
+                Ok(Some(s)) if s.dynamic => continue,
                 Ok(s) => s,
                 Err(ScopeError) => continue,
             };
             let Some(ArgVal::Str(key)) = call.args.first() else {
                 continue;
             };
-            let Some(resolved) = full_key(key, scope.as_deref(), &ctx, call.receiver_present)
-            else {
+            let scope_text = scope.as_ref().map(|s| s.text.as_str());
+            let Some(resolved) = full_key(key, scope_text, &ctx, call.receiver_present) else {
                 continue;
             };
             let occ = Occurrence {

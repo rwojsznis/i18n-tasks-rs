@@ -71,6 +71,15 @@ every key used.
 report, with a note that keys they reach cannot be verified. The rule, from
 blocker B5: never treat an opaque call as "no keys used".
 
+The same applies to a `scope:` that is not static (`nodes.rb#scope` raises a
+`ScopeError`, and the gem drops the call). In the port, a scope with at least
+one literal part makes a pattern, and each variable, constant or call in it
+becomes `*`: `t(:title, scope: [:products, category])` uses
+`products.*.title`. It is `*`, not `*:`, because a scope often holds a dotted
+path. A scope with no literal part (`scope: CONST`, `scope: nil`,
+`scope: []`) makes the call opaque. Both scanners, Prism and the Slim/Haml
+regex, follow this rule.
+
 ## 3. `relative_roots` is honoured (blocker B6) — bug fix
 
 **Gem.** The Prism path (`prism_scanners/nodes.rb:36-72`, `:354-381`) ignores
