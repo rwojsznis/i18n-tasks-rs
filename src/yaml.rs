@@ -12,9 +12,11 @@
 //!
 //! Both errors name the file and the line.
 
+use regex::Regex;
 use saphyr_parser::{Event, Parser, ScalarStyle, Span};
 use std::fmt;
 use std::path::Path;
+use std::sync::LazyLock;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Node {
@@ -233,6 +235,21 @@ pub fn resolve_plain(s: &str) -> Resolved {
     Resolved::Str
 }
 
+/// Psych's `INTEGER_LEGACY` and `FLOAT`, without the sign. Both read a comma
+/// as a digit separator, so a plain `2,5` is the integer 25. The prefixed
+/// forms use the Psych 5.0 spelling, which accepts more than later versions;
+/// a value either version reads as a number gets quotes.
+#[allow(
+    clippy::expect_used,
+    reason = "a static pattern that fails to compile is a bug here, not a run-time condition"
+)]
+static COMMA_NUMBER: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"^(?:0b[0-1_,]+|0[0-7_,]+|[1-9](?:[0-9]|,[0-9]|_[0-9])*|0x[0-9a-fA-F_,]+|(?:[0-9][0-9_,]*)?\.[0-9]*(?:[eE][-+][0-9]+)?)$",
+    )
+    .expect("static pattern compiles")
+});
+
 fn is_yaml_number(s: &str) -> bool {
     let body = s.strip_prefix(['-', '+']).unwrap_or(s);
     if body.is_empty() {
@@ -240,6 +257,9 @@ fn is_yaml_number(s: &str) -> bool {
     }
     if body.eq_ignore_ascii_case(".inf") || body.eq_ignore_ascii_case(".nan") {
         return true;
+    }
+    if body.contains(',') {
+        return COMMA_NUMBER.is_match(body);
     }
     // `0x1f`, `0b1010` and `0o17`, underscores included.
     for (prefix, radix) in [
@@ -494,6 +514,23 @@ mod tests {
             "-", "+", "_", "0x", "0b", "0xzz", "1.2.3", "e5", "12a", "1-2", ".in",
             // Rust parses these three as floats. YAML 1.1 does not.
             "inf", "infinity", "nan",
+        ] {
+            assert_eq!(resolve_plain(v), Resolved::Str, "{v} is not a number");
+        }
+    }
+
+    /// Psych reads a comma in a number as a digit separator, so `2,5` is the
+    /// integer 25 and `1,000.5` the float 1000.5. Checked against Psych 5.0.1.
+    #[test]
+    fn yaml_number_recognition_with_commas() {
+        for v in [
+            "1,000", "2,5", "-1,5", "+1,5", "1,2,3", "1,5.25", "1,000.5", "1,.5", "1,.", "0,7",
+            "0,,7", "00,1", "0,", "0b1,0", "0b,1", "0x,f", "0xf,f",
+        ] {
+            assert_eq!(resolve_plain(v), Resolved::Number, "{v} is a number");
+        }
+        for v in [
+            "1,", "1,,0", "1_,0", "0,8", "1,a", "a,b", ",5", "1,0e5", "1,0e+5", "1,5:30",
         ] {
             assert_eq!(resolve_plain(v), Resolved::Str, "{v} is not a number");
         }
