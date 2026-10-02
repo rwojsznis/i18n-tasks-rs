@@ -446,12 +446,12 @@ mod tests {
 
     #[test]
     fn rejects_what_the_gem_rejects() {
-        assert!(keys("t \"a.b'").is_empty());
-        assert!(keys("t a.b").is_empty());
-        assert!(keys(r#"theme_t "a.b.""#).is_empty());
-        assert!(keys("Spree.t 'not_a_key'").is_empty());
-        assert!(keys("| x't :fp_quote_before").is_empty());
-        assert!(keys("| x-t :fp_dash_before").is_empty());
+        assert_eq!(keys("t \"a.b'"), Vec::<String>::new());
+        assert_eq!(keys("t a.b"), Vec::<String>::new());
+        assert_eq!(keys(r#"theme_t "a.b.""#), Vec::<String>::new());
+        assert_eq!(keys("Spree.t 'not_a_key'"), Vec::<String>::new());
+        assert_eq!(keys("| x't :fp_quote_before"), Vec::<String>::new());
+        assert_eq!(keys("| x-t :fp_dash_before"), Vec::<String>::new());
     }
 
     // ref: spec/pattern_with_scope_scanner_spec.rb
@@ -494,7 +494,7 @@ mod tests {
     fn an_expression_with_a_scope_is_a_pattern() {
         assert_eq!(patterns(r#"= t key, scope: "scope""#), ["scope.*:"]);
         assert_eq!(patterns(r#"= t @key.m, scope: "scope""#), ["scope.*:"]);
-        assert!(keys(r#"= t key, scope: "scope""#).is_empty());
+        assert_eq!(keys(r#"= t key, scope: "scope""#), Vec::<String>::new());
     }
 
     #[test]
@@ -506,11 +506,11 @@ mod tests {
 
     #[test]
     fn skips_comment_lines_but_keeps_magic_comments() {
-        assert!(keys("/ t(:fp_comment)").is_empty());
+        assert_eq!(keys("/ t(:fp_comment)"), Vec::<String>::new());
         assert_eq!(keys("/ i18n-tasks-use t(:fn_comment)"), ["fn_comment"]);
         assert_eq!(keys("#x = t 'not_a_comment'"), ["not_a_comment"]);
         assert_eq!(keys("-# i18n-tasks-use t(:kept)"), ["kept"]);
-        assert!(keys("-# t(:dropped)").is_empty());
+        assert_eq!(keys("-# t(:dropped)"), Vec::<String>::new());
     }
 
     #[test]
@@ -533,14 +533,14 @@ mod tests {
     #[test]
     fn interpolated_keys_become_patterns() {
         assert_eq!(patterns(r#"p #{t "a.#{b}.c"}"#), ["a.*:.c"]);
-        assert!(keys(r#"p #{t "a.#{b}.c"}"#).is_empty());
+        assert_eq!(keys(r#"p #{t "a.#{b}.c"}"#), Vec::<String>::new());
         // No static content at all, so it is an opaque call, never a pattern.
         let out = scan(
             r##"= t "#{b}""##.as_bytes(),
             &PathBuf::from("app/views/x/index.html.slim"),
             &cfg(),
         );
-        assert!(out.patterns.is_empty());
+        assert!(out.patterns.is_empty(), "{:?}", out.patterns);
         assert_eq!(out.opaque.len(), 1);
     }
 
@@ -595,12 +595,12 @@ mod tests {
     #[test]
     fn a_key_the_gem_would_reject_yields_nothing() {
         // An empty literal is not a key.
-        assert!(keys("t('')").is_empty());
+        assert_eq!(keys("t('')"), Vec::<String>::new());
         // A space that does not sit between two alphanumerics fails the rule,
         // so the whole occurrence is dropped.
-        assert!(keys("t('a .b')").is_empty());
-        assert!(keys("t('a. b')").is_empty());
-        assert!(keys("t(' a')").is_empty());
+        assert_eq!(keys("t('a .b')"), Vec::<String>::new());
+        assert_eq!(keys("t('a. b')"), Vec::<String>::new());
+        assert_eq!(keys("t(' a')"), Vec::<String>::new());
     }
 
     /// ref: spec/pattern_with_scope_scanner_spec.rb "matches only the scope

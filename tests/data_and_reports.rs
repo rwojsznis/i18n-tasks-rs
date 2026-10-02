@@ -719,15 +719,13 @@ fn a_locale_with_no_tree_is_skipped_by_every_report() {
     assert!(store.tree("zz").is_none());
     let locales = vec!["zz".to_string()];
     let used = UsedKeys::scan(&cfg).unwrap();
-    assert!(
-        unused::report(&cfg, &store, &used, &locales)
-            .rows
-            .is_empty()
-    );
-    assert!(interpolations::reserved(&store, &locales).rows.is_empty());
+    let unused_rows = unused::report(&cfg, &store, &used, &locales).rows;
+    assert!(unused_rows.is_empty(), "{unused_rows:?}");
+    let reserved = interpolations::reserved(&store, &locales).rows;
+    assert!(reserved.is_empty(), "{reserved:?}");
     assert_eq!(forest_stats(&store, &locales).key_count, 0);
     let m = missing::report(&cfg, &store, &used, &locales, &[MissingType::Plural]);
-    assert!(m.rows.is_empty());
+    assert!(m.rows.is_empty(), "{:?}", m.rows);
     // `missing --types diff` still reports what the base locale holds, because
     // that side reads the base tree, not the locale's.
     let m = missing::report(&cfg, &store, &used, &locales, &[MissingType::Diff]);
@@ -765,7 +763,7 @@ fn inconsistent_interpolations_needs_a_base_tree() {
     );
     let store = Store::load(&cfg).unwrap();
     let r = interpolations::inconsistent(&cfg, &store, &store.locales);
-    assert!(r.rows.is_empty());
+    assert!(r.rows.is_empty(), "{:?}", r.rows);
     assert_eq!(r.outcome(), Outcome::Clean);
 }
 
@@ -1008,17 +1006,14 @@ fn reports_survive_a_store_with_no_base_tree() {
     };
     let used = UsedKeys::scan(&cfg).unwrap();
     let r = interpolations::inconsistent(&cfg, &store, &store.locales);
-    assert!(r.rows.is_empty());
+    assert!(r.rows.is_empty(), "{:?}", r.rows);
     assert_eq!(r.outcome(), Outcome::Clean);
     for ty in MissingType::ALL {
         let m = missing::report(&cfg, &store, &used, &store.locales, &[ty]);
         assert!(m.rows.is_empty(), "{ty:?}: {:?}", m.rows);
     }
-    assert!(
-        unused::report(&cfg, &store, &used, &store.locales)
-            .rows
-            .is_empty()
-    );
+    let unused_rows = unused::report(&cfg, &store, &used, &store.locales).rows;
+    assert!(unused_rows.is_empty(), "{unused_rows:?}");
     assert_eq!(forest_stats(&store, &store.locales).key_count, 0);
 }
 
@@ -1067,7 +1062,7 @@ fn missing_plural_skips_a_locale_with_no_tree() {
         &["fr".to_string()],
         &[MissingType::Plural],
     );
-    assert!(m.rows.is_empty());
+    assert!(m.rows.is_empty(), "{:?}", m.rows);
 }
 
 /// A locale whose value is a scalar rather than a mapping contributes nothing.

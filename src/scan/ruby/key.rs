@@ -157,8 +157,14 @@ mod tests {
     /// A root that is nowhere in the path yields no template path at all.
     #[test]
     fn a_path_outside_the_root_has_no_template_path() {
-        assert!(template_path("lib/tasks/thing.rb", "app/views").is_empty());
-        assert!(template_path("app/view/x.html.erb", "app/views").is_empty());
+        assert_eq!(
+            template_path("lib/tasks/thing.rb", "app/views"),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            template_path("app/view/x.html.erb", "app/views"),
+            Vec::<String>::new()
+        );
     }
 
     #[test]
