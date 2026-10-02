@@ -148,6 +148,30 @@ fn nil_keys_are_skipped_with_a_warning() {
     assert!(store.warnings[0].contains("nil key"));
 }
 
+/// Rails reads only the last of two duplicate keys, so the first is not data.
+/// A file read for two locales still warns once.
+#[test]
+fn a_duplicate_key_warns_with_both_lines() {
+    let p = Project::new("dupkeys");
+    p.write(
+        "config/locales/all.yml",
+        "en:\n  a: A\n  a: B\nde:\n  a: A\n",
+    );
+    let cfg = p.config(
+        "base_locale: en\nlocales: [en, de]\ndata:\n  read:\n    - config/locales/all.yml\n",
+    );
+    let store = Store::load(&cfg).unwrap();
+    assert_eq!(store.warnings.len(), 1, "{:?}", store.warnings);
+    assert!(
+        store.warnings[0].ends_with(
+            "all.yml:2: `a` appears again on line 3. Rails reads only the last one, \
+             so the tool ignores this one and `normalize --write` removes it."
+        ),
+        "{}",
+        store.warnings[0]
+    );
+}
+
 #[test]
 fn an_empty_mapping_contributes_no_leaves() {
     // `from_key_value` gives an empty Hash empty children, so the node is not a

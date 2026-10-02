@@ -327,10 +327,17 @@ fn read_all(
         .collect();
     let mut trees = HashMap::with_capacity(locales.len());
     let mut warnings = Vec::new();
+    // A file that holds several locales is read once per locale, and a
+    // warning about the file itself comes back each time.
+    let mut seen = HashSet::new();
     for (locale, result) in locales.iter().zip(per_locale) {
         let (tree, locale_warnings) = result?;
         trees.insert(locale.clone(), tree);
-        warnings.extend(locale_warnings);
+        for w in locale_warnings {
+            if seen.insert(w.clone()) {
+                warnings.push(w);
+            }
+        }
     }
     Ok((trees, warnings))
 }
@@ -369,7 +376,19 @@ fn read_locale(
             }
             let src = std::fs::read_to_string(&path)
                 .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
-            let Some(root) = yaml::parse(&src, &path).map_err(|e| e.to_string())? else {
+            let (root, shadowed) =
+                yaml::parse_with_shadowed(&src, &path).map_err(|e| e.to_string())?;
+            for d in shadowed {
+                warnings.push(format!(
+                    "{}:{}: `{}` appears again on line {}. Rails reads only the last one, \
+                     so the tool ignores this one and `normalize --write` removes it.",
+                    path.display(),
+                    d.line,
+                    d.key,
+                    d.by_line
+                ));
+            }
+            let Some(root) = root else {
                 continue;
             };
             let shared: Arc<Path> = Arc::from(path.as_path());
