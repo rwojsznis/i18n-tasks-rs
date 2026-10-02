@@ -57,7 +57,11 @@ static CALL_RE: LazyLock<Regex> = LazyLock::new(|| {
         (?:
           \s* , \s*
           (?: :scope \s* => \s* | scope: \s* )
-          (?P<scope> \[ [^\n)%\#]* \] | [^\n)%\#,]* )
+          (?P<scope>
+              % [iIwW] (?: \[ [^\n\]]* \] | \( [^\n)]* \) | \{ [^\n}]* \} )
+            | \[ [^\n)%\#]* \]
+            | [^\n)%\#,]*
+          )
         )?
         "#,
     )
@@ -111,12 +115,52 @@ pub fn scan(bytes: &[u8], path: &Path, cfg: &ScanConfig) -> FileScan {
 
         // ref: pattern_scanner.rb:45 — the comment check comes before the key
         // is resolved, and it tests the whole line.
-        if is_comment_line(ext, index.line_text(bytes, call_pos)) {
+        let line = line_kind(ext, index.line_text(bytes, call_pos));
+        if line == LineKind::Comment {
             continue;
         }
-        let Some(key) = match_to_key(&arg, scope.as_deref(), path, cfg) else {
-            continue;
+        // A magic comment names keys, so only a static key counts, as in
+        // `magic.rs`. An opaque call made by a comment would block
+        // `remove-unused` for no reason.
+        let magic = line == LineKind::Magic;
+        let (line_num, line_pos) = index.locate(call_pos);
+        let occ = |raw_key: String, candidate_keys: Vec<String>| Occurrence {
+            path: Arc::clone(&shared),
+            snippet: String::from_utf8_lossy(index.line_text(bytes, call_pos)).into_owned(),
+            pos: call_pos,
+            line_pos,
+            line_num,
+            raw_key,
+            candidate_keys,
         };
+        let scoped = match match_to_key(&arg, scope.as_deref(), path, cfg) {
+            Ok(Some(scoped)) => scoped,
+            Ok(None) => continue,
+            // Blocker B5: never treat an opaque call as "no keys used".
+            Err(OpaqueScope) => {
+                if !magic {
+                    out.opaque.push(occ(strip_literal(&arg), Vec::new()));
+                }
+                continue;
+            }
+        };
+        if scoped.scope.contains('*') {
+            if magic {
+                continue;
+            }
+            // `valid_key` rejects `*`, so only the key half is checked.
+            if !valid_key(&scoped.key) {
+                continue;
+            }
+            let mut pattern = format!("{}.{}", scoped.scope, replace_interpolations(&scoped.key));
+            if pattern.ends_with('.') {
+                pattern.push_str("*:");
+            }
+            let occ = occ(strip_literal(&arg), vec![pattern.clone()]);
+            push_pattern(&mut out, pattern, occ);
+            continue;
+        }
+        let key = scoped.full();
         // ref: pattern_scanner.rb:50 — a key built up from a prefix ending in a
         // dot becomes a single-segment wildcard.
         let key = if key.ends_with('.') {
@@ -124,36 +168,30 @@ pub fn scan(bytes: &[u8], path: &Path, cfg: &ScanConfig) -> FileScan {
         } else {
             key
         };
-        if !valid_key(&key) {
+        if !valid_key(&key) || (magic && key.contains("#{")) {
             continue;
         }
-        let (line_num, line_pos) = index.locate(call_pos);
-        let occ = Occurrence {
-            path: Arc::clone(&shared),
-            snippet: String::from_utf8_lossy(index.line_text(bytes, call_pos)).into_owned(),
-            pos: call_pos,
-            line_pos,
-            line_num,
-            raw_key: strip_literal(&arg),
-            candidate_keys: vec![key.clone()],
-        };
+        let occ = occ(strip_literal(&arg), vec![key.clone()]);
         push_key(&mut out, key, occ);
     }
     out
+}
+
+fn push_pattern(out: &mut FileScan, pattern: String, occ: Occurrence) {
+    if ruby::is_all_wildcard(&pattern) {
+        // ref: used_keys.rb#expr_key_re `ignore_pattern_re` — a pattern with
+        // no static content would mark every key used.
+        out.opaque.push(occ);
+    } else {
+        out.patterns.push((pattern, occ));
+    }
 }
 
 /// Blocker B5, and the gem's `used_in_expr?` for the same input: a key with an
 /// interpolation in it is a pattern, not a key.
 fn push_key(out: &mut FileScan, key: String, occ: Occurrence) {
     if key.contains("#{") {
-        let pattern = replace_interpolations(&key);
-        if ruby::is_all_wildcard(&pattern) {
-            // ref: used_keys.rb#expr_key_re `ignore_pattern_re` — a pattern with
-            // no static content would mark every key used.
-            out.opaque.push(occ);
-        } else {
-            out.patterns.push((pattern, occ));
-        }
+        push_pattern(out, replace_interpolations(&key), occ);
         return;
     }
     // A key that came from a `foo.` prefix keeps the gem's literal form, and
@@ -168,23 +206,55 @@ fn push_key(out: &mut FileScan, key: String, occ: Occurrence) {
     out.keys.push((key, occ));
 }
 
-/// ref: pattern_with_scope_scanner.rb:23-34
-fn match_to_key(arg: &str, scope: Option<&str>, path: &Path, cfg: &ScanConfig) -> Option<String> {
-    let key = absolute_key(&strip_literal(arg), path, cfg)?;
-    match scope {
-        Some(scope) => {
-            let parts = extract_literal_or_array_of_literals(scope)?;
-            if parts.is_empty() {
-                return None;
-            }
-            Some(format!("{}.{}", parts.join("."), key))
+/// A scope with no literal part. The gem drops the call; here the call is
+/// opaque.
+struct OpaqueScope;
+
+struct ScopedKey {
+    /// Empty when the call has no `scope:`.
+    scope: String,
+    key: String,
+}
+
+impl ScopedKey {
+    fn full(self) -> String {
+        if self.scope.is_empty() {
+            self.key
+        } else {
+            format!("{}.{}", self.scope, self.key)
         }
-        // Without a scope, an expression argument is dropped: only a literal
-        // starts with something other than a word character. Ruby's `\w` is
-        // ASCII-only. ref: pattern_with_scope_scanner.rb:32
-        None if arg.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_') => None,
-        None => Some(key),
     }
+}
+
+/// ref: pattern_with_scope_scanner.rb:23-34
+fn match_to_key(
+    arg: &str,
+    scope: Option<&str>,
+    path: &Path,
+    cfg: &ScanConfig,
+) -> Result<Option<ScopedKey>, OpaqueScope> {
+    let Some(key) = absolute_key(&strip_literal(arg), path, cfg) else {
+        return Ok(None);
+    };
+    // Rails drops `nil` and `[]` from a scope, so they leave it empty. An
+    // empty match is different: the scope is there, but `CALL_RE` could not
+    // read it.
+    let scope = match scope {
+        Some(scope) if scope.trim().is_empty() => return Err(OpaqueScope),
+        Some(scope) if scope.starts_with('%') => percent_array(scope).ok_or(OpaqueScope)?.join("."),
+        Some(scope) => extract_scope_parts(scope).ok_or(OpaqueScope)?.join("."),
+        None => String::new(),
+    };
+    // Without a scope, an expression argument is dropped: only a literal
+    // starts with something other than a word character. Ruby's `\w` is
+    // ASCII-only. ref: pattern_with_scope_scanner.rb:32
+    if scope.is_empty() && arg.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_') {
+        return Ok(None);
+    }
+    if !scope.is_empty() && ruby::is_all_wildcard(&scope) {
+        return Err(OpaqueScope);
+    }
+    Ok(Some(ScopedKey { scope, key }))
 }
 
 /// ref: relative_keys.rb#absolute_key
@@ -222,13 +292,16 @@ fn strip_literal(literal: &str) -> String {
     literal.to_string()
 }
 
-/// ref: pattern_with_scope_scanner.rb:66-97
+/// ref: pattern_with_scope_scanner.rb:66-97 `extract_literal_or_array_of_literals`
 ///
-/// Returns `None` for anything that is not a literal or an array of literals,
-/// which drops the occurrence.
-fn extract_literal_or_array_of_literals(s: &str) -> Option<Vec<String>> {
+/// The gem accepts only literals. A plain expression such as `category` or
+/// `@x.y` is accepted here too, as `*`, so the key becomes a pattern (blocker
+/// B5). `*`, not `*:`, because a scope often holds a dotted path. Returns
+/// `None` for anything else.
+fn extract_scope_parts(s: &str) -> Option<Vec<String>> {
     let mut literals: Vec<String> = Vec::new();
     let mut in_brackets = false;
+    let mut closed = false;
     let mut acc = String::new();
     for c in s.chars() {
         match c {
@@ -238,17 +311,27 @@ fn extract_literal_or_array_of_literals(s: &str) -> Option<Vec<String>> {
                 }
                 in_brackets = true;
             }
-            ']' => break,
+            ']' => {
+                closed = true;
+                break;
+            }
             ',' => {
                 consume_literal(&mut acc, &mut literals)?;
                 if !in_brackets {
                     break;
                 }
             }
-            _ if is_valid_key_char(c) || c == '\'' || c == '"' || c == ':' => acc.push(c),
+            _ if is_valid_key_char(c) || matches!(c, '\'' | '"' | ':' | '@') => acc.push(c),
             ' ' => {}
             _ => return None,
         }
+    }
+    // `CALL_RE` stops the scope at `)` and `#`, so `[:a, f(1)]` arrives as
+    // `[:a, f(1`, or as `[:a` once the fallback branch stops at the comma.
+    // Reading the part before the cut would make a static key from a dynamic
+    // scope.
+    if in_brackets && !closed {
+        return None;
     }
     if !acc.is_empty() {
         consume_literal(&mut acc, &mut literals)?;
@@ -256,11 +339,27 @@ fn extract_literal_or_array_of_literals(s: &str) -> Option<Vec<String>> {
     Some(literals)
 }
 
-fn consume_literal(acc: &mut String, literals: &mut Vec<String>) -> Option<()> {
-    if !LITERAL_RE.is_match(acc.as_bytes()) {
+/// `%i[a b]`, `%w(a b)` and the other delimiters `CALL_RE` accepts. An
+/// interpolation in `%I` or `%W` returns `None`.
+fn percent_array(s: &str) -> Option<Vec<String>> {
+    let interpolating = matches!(s.as_bytes().get(1), Some(b'I' | b'W'));
+    let body = s.get(3..s.len().checked_sub(1)?)?;
+    if interpolating && body.contains("#{") {
         return None;
     }
-    literals.push(strip_literal(acc));
+    Some(body.split_whitespace().map(str::to_string).collect())
+}
+
+fn consume_literal(acc: &mut String, literals: &mut Vec<String>) -> Option<()> {
+    if acc == "nil" {
+        // Rails drops `nil` from a scope.
+    } else if acc.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_' || c == '@') {
+        literals.push("*".to_string());
+    } else if LITERAL_RE.is_match(acc.as_bytes()) {
+        literals.push(strip_literal(acc));
+    } else {
+        return None;
+    }
     acc.clear();
     Some(())
 }
@@ -293,13 +392,21 @@ fn prev_char(bytes: &[u8], offset: usize) -> Option<char> {
         .and_then(|s| s.chars().next())
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LineKind {
+    Code,
+    Comment,
+    /// A comment that carries `i18n-tasks-use`.
+    Magic,
+}
+
 /// ref: pattern_scanner.rb:16-24 `IGNORE_LINES`
 ///
 /// A comment line is skipped unless it carries a magic comment. The gem writes
 /// this as a negative lookahead, `(?!\si18n-tasks-use)`; restructuring it that
 /// way needs no lookaround. `.jsx`, `.ts` and `.tsx` are absent from the gem's
 /// table, so a `//` comment in one of those is scanned, here as there.
-fn is_comment_line(ext: &str, line: &[u8]) -> bool {
+fn line_kind(ext: &str, line: &[u8]) -> LineKind {
     let markers: &[&str] = match ext {
         "coffee" | "opal" => &["#"],
         "es6" | "js" => &["//"],
@@ -307,7 +414,7 @@ fn is_comment_line(ext: &str, line: &[u8]) -> bool {
         "slim" => &["-#", "/"],
         // The gem's table has an `erb` entry, but its regex scanner never sees
         // an `.erb` file: `ErbAstScanner` handles those, and so does `erb.rs`.
-        _ => return false,
+        _ => return LineKind::Code,
     };
     let line = String::from_utf8_lossy(line);
     let trimmed = line.trim_start();
@@ -319,17 +426,25 @@ fn is_comment_line(ext: &str, line: &[u8]) -> bool {
         let keeps_magic = rest
             .strip_prefix(char::is_whitespace)
             .is_some_and(|rest| rest.starts_with("i18n-tasks-use"));
-        return !keeps_magic;
+        return if keeps_magic {
+            LineKind::Magic
+        } else {
+            LineKind::Comment
+        };
     }
     for marker in markers {
         if let Some(rest) = trimmed.strip_prefix(marker) {
             let keeps_magic = rest
                 .strip_prefix(char::is_whitespace)
                 .is_some_and(|r| r.starts_with("i18n-tasks-use"));
-            return !keeps_magic;
+            return if keeps_magic {
+                LineKind::Magic
+            } else {
+                LineKind::Comment
+            };
         }
     }
-    false
+    LineKind::Code
 }
 
 /// ref: pattern_scanner.rb:73 `VALID_KEY_RE_DYNAMIC`, which is the non-strict
@@ -411,6 +526,16 @@ mod tests {
         out.keys.into_iter().map(|(k, _)| k).collect()
     }
 
+    fn opaque(src: &str) -> usize {
+        scan(
+            src.as_bytes(),
+            &PathBuf::from("app/views/x/index.html.slim"),
+            &cfg(),
+        )
+        .opaque
+        .len()
+    }
+
     fn patterns(src: &str) -> Vec<String> {
         let out = scan(
             src.as_bytes(),
@@ -473,19 +598,43 @@ mod tests {
         );
     }
 
+    /// Blocker B5: a call with a dynamic scope uses keys, so it must not be
+    /// dropped. An expression in the scope can hold a dotted path, so it is
+    /// `*`; a scope with no literal part makes the call opaque.
     #[test]
-    fn drops_a_scope_that_is_not_a_literal() {
+    fn a_scope_that_is_not_a_literal_is_a_pattern_or_opaque() {
+        assert_eq!(
+            patterns("= t(:title, scope: [:products, category])"),
+            ["products.*.title"]
+        );
+        assert_eq!(patterns("= t :key, scope: [:x, @y.z]"), ["x.*.key"]);
+        assert_eq!(patterns("= t key, scope: [:x, y]"), ["x.*.*:"]);
+        assert_eq!(patterns("= t 'a.', scope: [:x, y]"), ["x.*.a.*:"]);
         for src in [
             "= t :key, scope: a",
-            "= t :key, scope: []",
             "= t :key, scope: [a]",
+            // The scope regex stops at `)` and `#`, so these arrays are cut
+            // short and must not become a static `a.key`.
+            "= t :key, scope: [:a, sub(1)]",
+            "= t :key, scope: [:a, h.c(1)]",
+            "= t :key, scope: [:a, \"x#{b}\"]",
+            // `CALL_RE` stops at `%`, so the scope arrives empty.
+            "= t :key, scope: %(a b)",
             "= t :key, scope: [:x, [:y]]",
             "= t :key, scope: (a)",
             "= t key, scope: (a)",
-            "= t key",
         ] {
             assert!(keys(src).is_empty(), "expected no key from {src}");
+            assert!(patterns(src).is_empty(), "expected no pattern from {src}");
+            assert_eq!(opaque(src), 1, "expected an opaque call from {src}");
         }
+        // Rails drops `nil` and `[]` from a scope.
+        assert_eq!(keys("= t :key, scope: []"), ["key"]);
+        assert_eq!(keys("= t :key, scope: nil"), ["key"]);
+        assert_eq!(keys("= t :key, scope: [:x, nil]"), ["x.key"]);
+        // No scope at all: an expression key is dropped, as in the gem.
+        assert_eq!(keys("= t key"), Vec::<String>::new());
+        assert_eq!(opaque("= t key"), 0);
     }
 
     // An expression argument with a literal scope is dynamic, so it is a
@@ -502,6 +651,49 @@ mod tests {
         // A custom SlimMultilineScanner exists for exactly this.
         assert_eq!(keys("= t(\\\n  'multiline.key')"), ["multiline.key"]);
         assert_eq!(keys("= t (\n  'spaced.key')"), ["spaced.key"]);
+    }
+
+    /// A `%i[]` or `%w[]` scope is static, as it is to the Prism scanner. An
+    /// interpolation in `%I[]` or `%W[]` makes the call opaque.
+    #[test]
+    fn a_percent_array_scope_is_static() {
+        assert_eq!(keys("= t :key, scope: %i[a b]"), ["a.b.key"]);
+        assert_eq!(keys("= t :key, scope: %w(a b)"), ["a.b.key"]);
+        assert_eq!(keys("= t :key, scope: %I{a b}"), ["a.b.key"]);
+        assert_eq!(keys("= t(:key, scope: %W[a  b], default: x)"), ["a.b.key"]);
+        assert_eq!(keys("= t :key, scope: %i[]"), ["key"]);
+        assert_eq!(opaque("= t :key, scope: %I[a #{b}]"), 1);
+        assert_eq!(opaque("= t :key, scope: %i[a b"), 1);
+    }
+
+    /// A magic comment names keys. A dynamic scope or key in one adds nothing,
+    /// the same as in `.rb` and `.erb` files: an opaque call made by a
+    /// comment would block `remove-unused` for no reason.
+    #[test]
+    fn a_magic_comment_takes_only_a_static_key() {
+        for (src, ext) in [
+            ("/ i18n-tasks-use t(:key, scope: [:a, x])", "slim"),
+            ("/ i18n-tasks-use t(:key, scope: whatever)", "slim"),
+            ("/ i18n-tasks-use t(:key, scope: f(1))", "slim"),
+            ("/ i18n-tasks-use t(\"a.#{b}\")", "slim"),
+            ("-# i18n-tasks-use t(:key, scope: whatever)", "haml"),
+            ("-# i18n-tasks-use t(:key, scope: [:a, x])", "haml"),
+        ] {
+            let out = scan(
+                src.as_bytes(),
+                &PathBuf::from(format!("app/views/x/index.html.{ext}")),
+                &cfg(),
+            );
+            assert!(out.keys.is_empty(), "{src}: {:?}", out.keys);
+            assert!(out.patterns.is_empty(), "{src}: {:?}", out.patterns);
+            assert!(out.opaque.is_empty(), "{src}: {:?}", out.opaque);
+        }
+        assert_eq!(
+            keys("/ i18n-tasks-use t(:key, scope: [:a, :b])"),
+            ["a.b.key"]
+        );
+        // Outside a comment the same call is still a pattern.
+        assert_eq!(patterns("= t(:key, scope: [:a, x])"), ["a.*.key"]);
     }
 
     #[test]

@@ -41,6 +41,10 @@ pub struct Pattern {
     /// Literal bytes the key must start with. A cheap reject for long
     /// `ignore_*` lists.
     prefix: Box<[u8]>,
+    /// Literal bytes the key must end with. The same reject for a pattern
+    /// that opens with a wildcard, such as `*.title` from a dynamic scope,
+    /// which has no prefix and would otherwise search every key.
+    suffix: Box<[u8]>,
     pub group_count: usize,
     pub source: String,
 }
@@ -59,6 +63,13 @@ pub(crate) fn compiles_on_this_thread() -> usize {
 #[cfg(test)]
 thread_local! {
     static COMPILE_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static SEARCH_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Counts keys that pass the literal checks and reach the backtracker.
+#[cfg(test)]
+pub(crate) fn searches_on_this_thread() -> usize {
+    SEARCH_COUNT.with(std::cell::Cell::get)
 }
 
 impl Pattern {
@@ -74,9 +85,17 @@ impl Pattern {
             Some(Inst::Lit(l)) => l.clone(),
             _ => Box::from(&[][..]),
         };
+        // From the tokens, not the program: a group's last alternative also
+        // ends in an instruction just before `Match`, but not every path
+        // passes through it.
+        let suffix: Box<[u8]> = match toks.last() {
+            Some(Tok::Lit(l)) => Box::from(l.as_bytes()),
+            _ => Box::from(&[][..]),
+        };
         Pattern {
             prog,
             prefix,
+            suffix,
             group_count,
             source: source.to_string(),
         }
@@ -89,9 +108,11 @@ impl Pattern {
     /// Returns the `{...}` group captures when the pattern matches the whole key.
     pub fn captures(&self, key: &str) -> Option<Captures> {
         let bytes = key.as_bytes();
-        if !bytes.starts_with(&self.prefix) {
+        if !bytes.starts_with(&self.prefix) || !bytes.ends_with(&self.suffix) {
             return None;
         }
+        #[cfg(test)]
+        SEARCH_COUNT.with(|c| c.set(c.get() + 1));
         let mut caps: Captures = vec![None; self.group_count];
         let mut memo = Memo::new(self.prog.len(), bytes.len());
         if self.run(0, bytes, 0, &mut caps, &mut memo) {
@@ -401,6 +422,33 @@ mod tests {
         assert!(m("übersetzung.*", "übersetzung.some.key"));
         assert!(!m("übersetzung.*", "ubersetzung.some.key"));
         assert!(m("*.日本語", "a.日本語"));
+    }
+
+    /// A pattern with a leading wildcard has no literal prefix, so without a
+    /// suffix check every key enters the backtracker. `t(:x, scope: [var,
+    /// :y])` gives `*.y.x`, and a large project can hold many of them.
+    #[test]
+    fn a_literal_suffix_rejects_a_key_before_the_backtracker() {
+        let p = Pattern::compile("*.lit.x");
+        let before = searches_on_this_thread();
+        assert!(!p.is_match("a.b.c"));
+        assert!(!p.is_match("a.lit.y"));
+        assert_eq!(
+            searches_on_this_thread(),
+            before,
+            "a wrong suffix must not search"
+        );
+        assert!(p.is_match("a.b.lit.x"));
+        assert!(!p.is_match(".lit.x.lit"));
+
+        // A group or a wildcard at the end gives no suffix, and still matches.
+        assert!(m("*.{a,b}", "x.b"));
+        assert!(m("*.a.*:", "x.a.y"));
+        assert!(m("*.a.:", "x.a.y"));
+        // Prefix and suffix may overlap in a short key; the search decides.
+        assert!(!m("a*a", "a"));
+        assert!(m("a*a", "aa"));
+        assert!(m("abc", "abc"));
     }
 
     // Full port of spec/key_pattern_matching_spec.rb

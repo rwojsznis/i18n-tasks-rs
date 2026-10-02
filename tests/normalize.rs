@@ -321,6 +321,38 @@ fn remove_unused_refuses_opaque_calls_without_an_override() {
     assert!(!p.exists("config/locales/en.yml"));
 }
 
+/// A dynamic `scope:` reaches live keys. A scope with a static part makes a
+/// pattern that keeps them; one without makes the call opaque, so the write
+/// is refused.
+#[test]
+fn remove_unused_keeps_keys_behind_a_dynamic_scope() {
+    let p = Project::new("remove-unused-dynamic-scope", SIMPLE);
+    p.write(
+        "config/locales/en.yml",
+        "en:\n  products:\n    shoes:\n      name: N\n      title: T\n",
+    )
+    .write(
+        "app/models/product.rb",
+        "class Product\n  def label(category)\n    t(:title, scope: [:products, category])\n    t(:name, scope: \"products.#{category}\")\n  end\nend\n",
+    );
+    let (code, text) = p.run(&["unused"]);
+    assert_eq!(code, 0, "{text}");
+
+    // `cats.title` is reachable only through the opaque call.
+    p.write(
+        "config/locales/en.yml",
+        "en:\n  cats:\n    title: C\n  products:\n    shoes:\n      name: N\n      title: T\n",
+    )
+    .write(
+        "app/models/other.rb",
+        "class Other\n  def label\n    t(:title, scope: CATEGORY_SCOPE)\n  end\nend\n",
+    );
+    let (code, text) = p.run(&["remove-unused", "--write", "--allow-delete"]);
+    assert_eq!(code, 2, "{text}");
+    assert!(text.contains("--allow-opaque"), "{text}");
+    assert!(p.exists("config/locales/en.yml"));
+}
+
 #[test]
 fn remove_unused_dry_run_prints_a_diff_and_does_not_write() {
     let p = Project::new("remove-unused-dry-run", SIMPLE);

@@ -51,13 +51,24 @@ fn prism_controller_fixture_matches_the_gem_spec() {
     );
 }
 
+fn sorted_patterns(scan: &FileScan) -> Vec<String> {
+    let mut out: Vec<String> = scan.patterns.iter().map(|(k, _)| k.clone()).collect();
+    out.sort();
+    out
+}
+
+fn opaque_snippets(scan: &FileScan) -> Vec<String> {
+    scan.opaque.iter().map(|o| o.snippet.clone()).collect()
+}
+
 /// ref: spec/fixtures/used_keys/a.rb
 #[test]
-fn scope_arguments_that_are_not_static_drop_the_occurrence() {
+fn scope_arguments_that_are_not_static_are_reported() {
     let scan = scan_fixture("used_keys/a.rb");
-    // A `scope:` that resolves to a constant, an array holding a constant, a
-    // shorthand `scope:` or a chained call is a ScopeError, and a ScopeError
-    // drops the occurrence. ref: nodes.rb#scope, nodes.rb:208
+    // The gem drops a call whose `scope:` is not static (nodes.rb#scope,
+    // nodes.rb:208). Blocker B5 forbids that: the call uses keys, so it is a
+    // pattern when the scope has a static part, and opaque otherwise. A
+    // constant becomes `*`, not `*:`, because it often holds a dotted path.
     let keys = sorted_unique_keys(&scan);
     assert_eq!(
         keys,
@@ -82,6 +93,54 @@ fn scope_arguments_that_are_not_static_drop_the_occurrence() {
     // The magic comment `# i18n-tasks-use t('service.what')` is what makes
     // `Service.translate(:what)` visible.
     assert!(keys.contains(&"service.what".to_string()));
+    assert_eq!(sorted_patterns(&scan), vec!["ignore.*.ignore_array"]);
+    let opaque = opaque_snippets(&scan);
+    for name in [
+        "ignore_a",
+        "ignore_b",
+        "shorthand_scope_key",
+        "chained_scope_key",
+    ] {
+        assert!(
+            opaque.iter().any(|s| s.contains(name)),
+            "{name} should be opaque: {opaque:?}"
+        );
+    }
+    assert_eq!(opaque.len(), 4, "{opaque:?}");
+}
+
+/// Every call below reaches live keys, so none of them may vanish. A variable
+/// in a scope becomes `*`, because it can hold a dotted path. A scope with no
+/// literal part makes the call opaque.
+#[test]
+fn a_dynamic_scope_is_a_pattern_or_opaque() {
+    let scan = scan_source(
+        "class Product
+  def label(category)
+    t(:title, scope: [:products, category])
+    t(:name, scope: \"products.#{category}\")
+    t('a.', scope: [:x, category])
+    t(:c, scope: CONST)
+    t(:m, scope: method_call)
+    t(:v, scope: [category])
+  end
+end
+",
+        "app/models/product.rb",
+    );
+    assert!(scan.keys.is_empty(), "{:?}", scan.keys);
+    assert_eq!(
+        sorted_patterns(&scan),
+        vec!["products.*.title", "products.*:.name", "x.*.a.*:"]
+    );
+    assert_eq!(
+        opaque_snippets(&scan),
+        vec![
+            "t(:c, scope: CONST)",
+            "t(:m, scope: method_call)",
+            "t(:v, scope: [category])"
+        ]
+    );
 }
 
 #[test]
@@ -94,15 +153,21 @@ fn a_static_scope_is_prepended() {
     assert_eq!(sorted_unique_keys(&scan), vec!["x.c", "x.y.a", "x.y.b"]);
 }
 
+/// The gem drops these calls (its PR #731). Rails drops `nil` and `[]` from a
+/// scope, so `I18n.t(:a, scope: nil)` reads `a`, and `[:x, nil]` reads `x.a`.
 #[test]
-fn a_falsey_scope_differs_from_an_absent_scope() {
-    // See PR #731. `Array(nil)` is empty, and an empty scope is a ScopeError.
-    let keys = scan_source("t('a', scope: nil)\n", "app/models/m.rb").keys;
-    assert!(keys.is_empty(), "{keys:?}");
-    assert_eq!(
-        sorted_unique_keys(&scan_source("t('a')\n", "app/models/m.rb")),
-        vec!["a"]
-    );
+fn nil_and_empty_scopes_are_dropped_as_in_rails() {
+    for (src, want) in [
+        ("t('a', scope: nil)\n", "a"),
+        ("t('a', scope: [])\n", "a"),
+        ("t('a', scope: [nil])\n", "a"),
+        ("t('a', scope: [:x, nil])\n", "x.a"),
+        ("t('a', scope: [nil, :x, []])\n", "x.a"),
+    ] {
+        let scan = scan_source(src, "app/models/m.rb");
+        assert_eq!(sorted_unique_keys(&scan), vec![want], "{src}");
+        assert!(scan.opaque.is_empty(), "{src}: {:?}", scan.opaque);
+    }
 }
 
 #[test]
@@ -470,7 +535,7 @@ I18n.t('scope_array', scope: ['events', 'titles'])
 I18n.t("scope_array_symbol", scope: %i[events descriptions])
 I18n.t("scope_array_words", scope: %w[events descriptions])
 
-# Cannot handle, should ignore
+# A pattern from the static parts, or opaque
 I18n.t("scope_with_known_variable", scope: ["this", "that", scope])
 I18n.t("scope_with_unknown", scope: ["this", "that", unknown, "other"])
 I18n.t(model.key, **translation_options(model))
@@ -486,12 +551,23 @@ I18n.t("success", scope: scope)
             "events.titles.scope_array",
         ]
     );
-    // `I18n.t(model.key, ...)` has no static key, so it is reported rather
-    // than dropped. ref: accepted difference 2.
-    assert_eq!(scan.opaque.len(), 1, "{:?}", scan.opaque);
-    // An empty scope list is a ScopeError, the same as a non-literal one.
-    let keys = scan_source("t('a', scope: [])\n", "app/models/m.rb").keys;
-    assert!(keys.is_empty(), "{keys:?}");
+    assert_eq!(
+        sorted_patterns(&scan),
+        vec![
+            "this.that.*.other.scope_with_unknown",
+            "this.that.*.scope_with_known_variable",
+        ]
+    );
+    // `I18n.t(model.key, ...)` has no static key, and `scope: scope` has no
+    // static scope, so both are reported rather than dropped. ref: accepted
+    // difference 2.
+    assert_eq!(
+        opaque_snippets(&scan),
+        vec![
+            "I18n.t(model.key, **translation_options(model))",
+            "I18n.t(\"success\", scope: scope)"
+        ]
+    );
 }
 
 /// ref: accepted difference 4. The gem re-parents a `before_action` lambda's
