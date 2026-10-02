@@ -146,6 +146,8 @@ pub struct LocaleTree {
     interior: HashSet<String>,
     /// Immediate child segment names, in insertion order.
     children: HashMap<String, Vec<String>>,
+    /// Slots of leaves that a later file replaced. `finish` drops them.
+    moved: Vec<usize>,
     /// Keys whose children are all leaves with a plural suffix.
     /// ref: lib/i18n/tasks/plural_keys.rb#plural_forms?
     plural_nodes: HashSet<String>,
@@ -176,15 +178,30 @@ impl LocaleTree {
         out
     }
 
-    /// Returns the leaf it replaced, and the index of the new one.
-    fn insert(&mut self, leaf: Leaf) -> Option<(Leaf, usize)> {
+    /// When the key came from another file, returns the old and the new
+    /// slot. The old one stays readable until `finish`.
+    fn insert(&mut self, leaf: Leaf) -> Option<(usize, usize)> {
         // A later file overrides an earlier one, as in Rails' load order.
-        if let Some(&i) = self.index.get(&leaf.key) {
-            return Some((std::mem::replace(&mut self.leaves[i], leaf), i));
+        let new = self.leaves.len();
+        match self.index.get(&leaf.key) {
+            Some(&old) if self.leaves[old].path == leaf.path => {
+                self.leaves[old] = leaf;
+                None
+            }
+            // The key moves to the later file's position, so that file keeps
+            // its own key order under `keep_order`.
+            Some(&old) => {
+                self.index.insert(leaf.key.clone(), new);
+                self.leaves.push(leaf);
+                self.moved.push(old);
+                Some((old, new))
+            }
+            None => {
+                self.index.insert(leaf.key.clone(), new);
+                self.leaves.push(leaf);
+                None
+            }
         }
-        self.index.insert(leaf.key.clone(), self.leaves.len());
-        self.leaves.push(leaf);
-        None
     }
 
     /// The immediate child segment names of `key`.
@@ -205,6 +222,20 @@ impl LocaleTree {
     }
 
     fn finish(&mut self) {
+        if !self.moved.is_empty() {
+            let moved: HashSet<usize> = self.moved.drain(..).collect();
+            let mut i = 0;
+            self.leaves.retain(|_| {
+                i += 1;
+                !moved.contains(&(i - 1))
+            });
+            self.index = self
+                .leaves
+                .iter()
+                .enumerate()
+                .map(|(i, l)| (l.key.clone(), i))
+                .collect();
+        }
         // One pass to record ancestors and immediate children. Doing this once
         // keeps `depluralize_key` constant time instead of a scan per key.
         //
@@ -487,9 +518,9 @@ fn flatten(
             // The sorted order is Rails' default. An app that adds its own
             // paths to `config.i18n.load_path` can read the files in another
             // order, so a disagreement is worth a look.
-            if let Some((old, i)) = replaced {
-                let new = &out.leaves[i];
-                if old.path != new.path && old.value != new.value {
+            if let Some((old, new)) = replaced {
+                let (old, new) = (&out.leaves[old], &out.leaves[new]);
+                if old.value != new.value {
                     warnings.push(format!(
                         "`{}.{}` has different values in {} and {}. The tool keeps the \
                          value from the second file, which Rails reads last by default.",

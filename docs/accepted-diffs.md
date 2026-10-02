@@ -759,3 +759,7 @@ does not read.
 path order, as Rails reads it. An app that adds its own paths to
 `config.i18n.load_path` can still differ, so two files that give one key
 different values get a warning that names both files.
+
+Under `keep_order` the read order no longer decides a file's key order. A
+key that a later file replaces takes that file's position, and keys that the
+pattern router moves into a file come after the file's own keys.

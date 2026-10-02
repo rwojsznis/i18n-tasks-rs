@@ -188,11 +188,20 @@ pub fn plan_filtered(
             claimed.insert(dest.path.clone(), locale.clone());
             check_foreign_locales(tree, &dest.path, locale)?;
 
-            let mut out = Tree::new();
+            let mut leaves = Vec::with_capacity(dest.keys.len());
             for key in &dest.keys {
-                let leaf = tree
-                    .get(key)
-                    .ok_or_else(|| format!("`{locale}.{key}` vanished between routing and emit"))?;
+                leaves.push(tree.get(key).ok_or_else(|| {
+                    format!("`{locale}.{key}` vanished between routing and emit")
+                })?);
+            }
+            // The leaves come in file read order. Under `keep_order`, a key the
+            // router moves in from a file that sorts first would otherwise go
+            // before the file's own keys.
+            if cfg.data.keep_order {
+                leaves.sort_by_key(|leaf| *leaf.path != *dest.path);
+            }
+            let mut out = Tree::new();
+            for leaf in leaves {
                 out.insert_segments(&leaf.segments(), leaf.value.clone());
             }
             // ref: `config[:sort] = !config[:keep_order]`
