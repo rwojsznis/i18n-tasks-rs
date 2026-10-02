@@ -351,6 +351,24 @@ fn normalize_locale_list(locales: &[String], base: &str) -> Vec<String> {
     out
 }
 
+/// The files of `patterns`, each at its last position.
+///
+/// The gem reads a file once per glob that matches it, so the last read wins.
+/// A real-world config has two overlapping `data.read` globs, and the second
+/// matches every file the first does. Reading each file once, at its last
+/// position, gives the same result.
+fn read_order(cfg: &Config, locale: &str, patterns: &[String]) -> Vec<PathBuf> {
+    let mut paths: Vec<PathBuf> = patterns
+        .iter()
+        .flat_map(|p| glob_paths(&cfg.root, &interpolate_locale(p, locale)))
+        .collect();
+    let mut seen = HashSet::new();
+    paths.reverse();
+    paths.retain(|p| seen.insert(p.clone()));
+    paths.reverse();
+    paths
+}
+
 /// ref: lib/i18n/tasks/data/file_system_base.rb#read_locale
 fn read_locale(
     cfg: &Config,
@@ -364,54 +382,43 @@ fn read_locale(
         locale: locale.to_string(),
         ..Default::default()
     };
-    let mut seen: HashSet<PathBuf> = HashSet::new();
-    for pattern in patterns {
-        let concrete = interpolate_locale(pattern, locale);
-        for path in glob_paths(&cfg.root, &concrete) {
-            // A real-world config has two overlapping `data.read` globs, where the
-            // second matches every file the first does. Deduplicate by resolved
-            // path so a file is read once, in first-glob order.
-            if !seen.insert(path.clone()) {
+    for path in read_order(cfg, locale, patterns) {
+        let src = std::fs::read_to_string(&path)
+            .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+        let (root, shadowed) = yaml::parse_with_shadowed(&src, &path).map_err(|e| e.to_string())?;
+        for d in shadowed {
+            warnings.push(format!(
+                "{}:{}: `{}` appears again on line {}. Rails reads only the last one, \
+                 so the tool ignores this one and `normalize --write` removes it.",
+                path.display(),
+                d.line,
+                d.key,
+                d.by_line
+            ));
+        }
+        let Some(root) = root else {
+            continue;
+        };
+        let shared: Arc<Path> = Arc::from(path.as_path());
+        let Some(entries) = root.as_map() else {
+            return Err(format!(
+                "{}: expected a mapping at the top level",
+                path.display()
+            ));
+        };
+        tree.file_locales.insert(
+            path.clone(),
+            entries
+                .iter()
+                .filter_map(|(k, _)| k.as_str().map(str::to_string))
+                .collect(),
+        );
+        // Each file maps locale to data, and one file may hold several.
+        for (k, v) in entries {
+            if k.as_str() != Some(locale) {
                 continue;
             }
-            let src = std::fs::read_to_string(&path)
-                .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
-            let (root, shadowed) =
-                yaml::parse_with_shadowed(&src, &path).map_err(|e| e.to_string())?;
-            for d in shadowed {
-                warnings.push(format!(
-                    "{}:{}: `{}` appears again on line {}. Rails reads only the last one, \
-                     so the tool ignores this one and `normalize --write` removes it.",
-                    path.display(),
-                    d.line,
-                    d.key,
-                    d.by_line
-                ));
-            }
-            let Some(root) = root else {
-                continue;
-            };
-            let shared: Arc<Path> = Arc::from(path.as_path());
-            let Some(entries) = root.as_map() else {
-                return Err(format!(
-                    "{}: expected a mapping at the top level",
-                    path.display()
-                ));
-            };
-            tree.file_locales.insert(
-                path.clone(),
-                entries
-                    .iter()
-                    .filter_map(|(k, _)| k.as_str().map(str::to_string))
-                    .collect(),
-            );
-            // Each file maps locale to data, and one file may hold several.
-            for (k, v) in entries {
-                if k.as_str() != Some(locale) {
-                    continue;
-                }
-                flatten(v, &mut Vec::new(), &shared, &path, &mut tree, warnings)?;
-            }
+            flatten(v, &mut Vec::new(), &shared, &path, &mut tree, warnings)?;
         }
     }
     tree.finish();

@@ -437,6 +437,11 @@ value, at the position of the first key. The reader used to keep both, so
 `normalize` merged the two blocks. It now keeps the last value, as Psych does,
 and warns with both line numbers. `migrate-config` refuses such a file.
 
+With overlapping `data.read` globs, the reader kept a file at its first
+position, so another file's copy of a key won. The gem reads the file once
+per glob, so its last read wins, and Rails sorts the same files. The reader
+now keeps each file at its last position.
+
 ## 18. The emitter never folds a line
 
 Psych folds at `line_width`, and the gem then strips the trailing spaces that

@@ -176,6 +176,35 @@ fn a_duplicate_key_keeps_the_first_position() {
     );
 }
 
+/// With overlapping read globs, Rails reads `en.yml` after `devise.en.yml`.
+/// The copy of `k` that Rails reads must be the one that stays.
+#[test]
+fn overlapping_globs_keep_the_value_rails_reads() {
+    let p = Project::new(
+        "overlap",
+        "base_locale: en\n\
+         locales: [en]\n\
+         data:\n\
+         \x20 read:\n\
+         \x20   - config/locales/%{locale}.yml\n\
+         \x20   - config/locales/*%{locale}.yml\n\
+         search:\n\
+         \x20 paths: [app/]\n",
+    );
+    p.write("config/locales/en.yml", "en:\n  k: from-en\n  a: A\n")
+        .write(
+            "config/locales/devise.en.yml",
+            "en:\n  k: from-devise\n  d: D\n",
+        );
+    let (code, text) = p.run(&["normalize", "--write"]);
+    assert_eq!(code, 0, "{text}");
+    assert_eq!(
+        p.read("config/locales/en.yml"),
+        "---\nen:\n  a: A\n  k: from-en\n"
+    );
+    assert_eq!(p.read("config/locales/devise.en.yml"), "---\nen:\n  d: D\n");
+}
+
 #[test]
 fn check_normalized_never_writes() {
     let p = Project::new("nowrite", SIMPLE);

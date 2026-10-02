@@ -121,6 +121,26 @@ fn overlapping_read_globs_are_deduplicated_and_merge_in_order() {
     assert!(tree.get("b").unwrap().path.ends_with("other.en.yml"));
 }
 
+/// The gem reads a file once per glob that matches it, so its last read wins:
+/// `en.yml`, `devise.en.yml`, `en.yml`. Rails sorts the same files, and also
+/// reads `en.yml` last.
+#[test]
+fn a_file_matched_by_two_globs_takes_its_last_position() {
+    let p = Project::new("overlap-last");
+    p.write("config/locales/en.yml", "en:\n  k: from-en\n  a: A\n")
+        .write(
+            "config/locales/devise.en.yml",
+            "en:\n  k: from-devise\n  d: D\n",
+        );
+    let cfg = p.config(
+        "base_locale: en\nlocales: [en]\ndata:\n  read:\n    - config/locales/%{locale}.yml\n    - config/locales/*%{locale}.yml\n",
+    );
+    let store = Store::load(&cfg).unwrap();
+    let k = store.tree("en").unwrap().get("k").unwrap();
+    assert_eq!(k.value, Value::Str("from-en".into()));
+    assert!(k.path.ends_with("config/locales/en.yml"), "{:?}", k.path);
+}
+
 #[test]
 fn locales_are_inferred_from_the_data_when_unset() {
     let p = Project::new("infer");
