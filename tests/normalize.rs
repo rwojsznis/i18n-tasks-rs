@@ -132,6 +132,50 @@ fn a_comma_in_a_number_keeps_its_quotes() {
     assert_eq!(p.run(&["check-normalized"]).0, 0);
 }
 
+/// Rails keeps the last of two duplicate keys. `normalize` must write that
+/// value, not a merge of both blocks.
+#[test]
+fn a_duplicate_key_keeps_the_last_value() {
+    let p = Project::new("duplicate", SIMPLE);
+    p.write(
+        "config/locales/en.yml",
+        "en:\n  a:\n    b: y\n  a: x\n  users:\n    old: O\n    name: N1\n  users:\n    name: N2\n",
+    );
+    let (code, text) = p.run(&["normalize", "--write"]);
+    assert_eq!(code, 0, "{text}");
+    assert_eq!(
+        p.read("config/locales/en.yml"),
+        "---\nen:\n  a: x\n  users:\n    name: N2\n"
+    );
+}
+
+/// Psych keeps the first key's position, which only shows with `keep_order`.
+/// A duplicate deeper down is handled the same way.
+#[test]
+fn a_duplicate_key_keeps_the_first_position() {
+    let p = Project::new(
+        "duplicate-order",
+        "base_locale: en\n\
+         locales: [en]\n\
+         data:\n\
+         \x20 read:\n\
+         \x20   - config/locales/%{locale}.yml\n\
+         \x20 keep_order: true\n\
+         search:\n\
+         \x20 paths: [app/]\n",
+    );
+    p.write(
+        "config/locales/en.yml",
+        "en:\n  z: Z\n  b:\n    old: O\n  a:\n    k: 1\n    j: J\n    k: 2\n  b:\n    new: New\n",
+    );
+    let (code, text) = p.run(&["normalize", "--write"]);
+    assert_eq!(code, 0, "{text}");
+    assert_eq!(
+        p.read("config/locales/en.yml"),
+        "---\nen:\n  z: Z\n  b:\n    new: New\n  a:\n    k: 2\n    j: J\n"
+    );
+}
+
 #[test]
 fn check_normalized_never_writes() {
     let p = Project::new("nowrite", SIMPLE);

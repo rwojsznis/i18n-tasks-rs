@@ -432,6 +432,11 @@ That project has no value like `"2,5"`. Psych reads a plain `2,5` as the
 integer 25, and the emitter used to drop the quotes. It now quotes any value
 Psych's `INTEGER_LEGACY` or `FLOAT` matches, commas included.
 
+That project also has no duplicate key in one mapping. Psych keeps the last
+value, at the position of the first key. The reader used to keep both, so
+`normalize` merged the two blocks. It now keeps the last value, as Psych does,
+and warns with both line numbers. `migrate-config` refuses such a file.
+
 ## 18. The emitter never folds a line
 
 Psych folds at `line_width`, and the gem then strips the trailing spaces that

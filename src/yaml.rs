@@ -14,6 +14,7 @@
 
 use regex::Regex;
 use saphyr_parser::{Event, Parser, ScalarStyle, Span};
+use std::collections::HashMap;
 use std::fmt;
 use std::path::Path;
 use std::sync::LazyLock;
@@ -98,6 +99,15 @@ impl fmt::Display for YamlError {
 
 impl std::error::Error for YamlError {}
 
+/// A mapping key that a later key with the same text replaced.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Shadowed {
+    pub key: String,
+    pub line: usize,
+    /// The line of the key that replaced it.
+    pub by_line: usize,
+}
+
 /// Parses the first document of `src`. Returns `None` for an empty document.
 ///
 /// # Errors
@@ -106,6 +116,19 @@ impl std::error::Error for YamlError {}
 /// three are refused rather than resolved, because `normalize` would write the
 /// resolved form back and lose them.
 pub fn parse(src: &str, path: &Path) -> Result<Option<Node>, YamlError> {
+    parse_with_shadowed(src, path).map(|(node, _)| node)
+}
+
+/// [`parse`], plus every duplicate key the result does not hold, in source
+/// order.
+///
+/// # Errors
+///
+/// As [`parse`].
+pub fn parse_with_shadowed(
+    src: &str,
+    path: &Path,
+) -> Result<(Option<Node>, Vec<Shadowed>), YamlError> {
     let disp = path.display().to_string();
     let err = |line: usize, message: String| YamlError {
         path: disp.clone(),
@@ -152,20 +175,21 @@ pub fn parse(src: &str, path: &Path) -> Result<Option<Node>, YamlError> {
     while i < events.len() {
         match events[i].0 {
             Event::StreamStart | Event::DocumentStart(_) => i += 1,
-            Event::StreamEnd | Event::DocumentEnd => return Ok(None),
+            Event::StreamEnd | Event::DocumentEnd => return Ok((None, Vec::new())),
             _ => break,
         }
     }
     if i >= events.len() {
-        return Ok(None);
+        return Ok((None, Vec::new()));
     }
-    let (node, _) = build(&events, i, &disp)?;
+    let mut shadowed = Vec::new();
+    let (node, _) = build(&events, i, &disp, &mut shadowed)?;
     // Psych turns a document that holds only `~`, `null` or nothing at all into
     // `nil`, and the gem then treats it as `{}`. ref: `load_file(path) || {}`.
     if is_null_scalar(&node) {
-        return Ok(None);
+        return Ok((None, shadowed));
     }
-    Ok(Some(node))
+    Ok((Some(node), shadowed))
 }
 
 /// A plain scalar that Psych resolves to `nil`.
@@ -331,7 +355,12 @@ fn tag_msg(tag: &str) -> String {
     )
 }
 
-fn build(events: &[(Event, Span)], mut i: usize, path: &str) -> Result<(Node, usize), YamlError> {
+fn build(
+    events: &[(Event, Span)],
+    mut i: usize,
+    path: &str,
+    shadowed: &mut Vec<Shadowed>,
+) -> Result<(Node, usize), YamlError> {
     let line = events[i].1.start.line();
     match &events[i].0 {
         Event::Scalar(v, style, _, _) => Ok((
@@ -346,7 +375,7 @@ fn build(events: &[(Event, Span)], mut i: usize, path: &str) -> Result<(Node, us
             i += 1;
             let mut items = Vec::new();
             while i < events.len() && !matches!(events[i].0, Event::SequenceEnd) {
-                let (n, next) = build(events, i, path)?;
+                let (n, next) = build(events, i, path, shadowed)?;
                 items.push(n);
                 i = next;
             }
@@ -354,9 +383,17 @@ fn build(events: &[(Event, Span)], mut i: usize, path: &str) -> Result<(Node, us
         }
         Event::MappingStart(..) => {
             i += 1;
-            let mut entries = Vec::new();
+            let mut entries: Vec<(Node, Node)> = Vec::new();
+            // Psych keeps the last value of a duplicate key, at the position
+            // of the first one. The tool keys data by text, so `1` and `'1'`
+            // are one key here, though Psych keeps both.
+            let mut seen: HashMap<&str, usize> = HashMap::new();
             while i < events.len() && !matches!(events[i].0, Event::MappingEnd) {
-                let (k, next) = build(events, i, path)?;
+                let key_text = match &events[i].0 {
+                    Event::Scalar(v, ..) => Some(v.as_ref()),
+                    _ => None,
+                };
+                let (k, next) = build(events, i, path, shadowed)?;
                 // ref: the gem relies on Psych rejecting `<<` merge keys only
                 // when aliases are off. The tool rejects the key outright.
                 if k.as_str() == Some("<<") {
@@ -366,9 +403,21 @@ fn build(events: &[(Event, Span)], mut i: usize, path: &str) -> Result<(Node, us
                         message: "YAML merge keys (`<<`) are not supported.".into(),
                     });
                 }
-                let (v, next2) = build(events, next, path)?;
-                entries.push((k, v));
+                let (v, next2) = build(events, next, path, shadowed)?;
                 i = next2;
+                if let Some(text) = key_text {
+                    if let Some(&at) = seen.get(text) {
+                        shadowed.push(Shadowed {
+                            key: text.to_string(),
+                            line: entries[at].0.line(),
+                            by_line: k.line(),
+                        });
+                        entries[at] = (k, v);
+                        continue;
+                    }
+                    seen.insert(text, entries.len());
+                }
+                entries.push((k, v));
             }
             Ok((Node::Map { entries, line }, i + 1))
         }
@@ -407,6 +456,43 @@ mod tests {
         let e = p("en:\n  a: &x 1\n  b: *x\n").unwrap_err();
         assert_eq!(e.line, 2);
         assert!(e.message.contains("anchors"));
+    }
+
+    /// Psych keeps the last value of a duplicate key, at the position of the
+    /// first one. A merge of the two would bring back keys Rails never sees.
+    #[test]
+    fn the_last_duplicate_key_wins() {
+        let n = p("en:\n  a:\n    b: y\n  c: 1\n  a: x\nen:\n  d: z\n  a: w\n")
+            .unwrap()
+            .unwrap();
+        let root = n.as_map().unwrap();
+        assert_eq!(root.len(), 1);
+        let en = n.map_get("en").unwrap();
+        let keys: Vec<_> = en
+            .as_map()
+            .unwrap()
+            .iter()
+            .map(|(k, _)| k.as_str())
+            .collect();
+        assert_eq!(keys, [Some("d"), Some("a")]);
+        assert_eq!(en.map_get("a").unwrap().as_str(), Some("w"));
+
+        let n = p("a:\n  b: y\nc: 1\n'a': x\n").unwrap().unwrap();
+        let keys: Vec<_> = n
+            .as_map()
+            .unwrap()
+            .iter()
+            .map(|(k, _)| k.as_str())
+            .collect();
+        assert_eq!(keys, [Some("a"), Some("c")]);
+        assert_eq!(n.map_get("a").unwrap().as_str(), Some("x"));
+        let (_, shadowed) =
+            parse_with_shadowed("en:\n  a: 1\n  a: 2\n  a: 3\n", Path::new("t.yml")).unwrap();
+        let lines: Vec<_> = shadowed
+            .iter()
+            .map(|s| (s.key.as_str(), s.line, s.by_line))
+            .collect();
+        assert_eq!(lines, [("a", 2, 3), ("a", 3, 4)]);
     }
 
     #[test]
