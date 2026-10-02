@@ -263,6 +263,9 @@ mod tests {
             "010",
             "089",
             "1_000",
+            "1,000",
+            "2,5",
+            "1,5.25",
             "1:30",
             ".inf",
             "2020-01-01",
@@ -272,7 +275,7 @@ mod tests {
             assert_ne!(scalar(v), v, "{v} must be quoted");
         }
         // These only look numeric.
-        for v in ["1.2.3", "e5", "12a", "0x", "1-2"] {
+        for v in ["1.2.3", "e5", "12a", "0x", "1-2", "1,", "a,b", "1,0e5"] {
             assert_eq!(scalar(v), v, "{v} must stay plain");
         }
     }

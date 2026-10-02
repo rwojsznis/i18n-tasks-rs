@@ -412,6 +412,10 @@ real: a copy of the reference project's whole `config/locales` tree was
 normalized and re-read **with Psych**. 81,955 keys before, 81,955 after, zero
 differences.
 
+That project has no value like `"2,5"`. Psych reads a plain `2,5` as the
+integer 25, and the emitter used to drop the quotes. It now quotes any value
+Psych's `INTEGER_LEGACY` or `FLOAT` matches, commas included.
+
 ## 18. The emitter never folds a line
 
 Psych folds at `line_width`, and the gem then strips the trailing spaces that

@@ -110,6 +110,28 @@ fn golden_kitchen_sink() {
     assert_eq!(p.run(&["check-normalized"]).0, 0);
 }
 
+/// Psych reads a plain `2,5` as the integer 25, so a quoted decimal comma
+/// must stay quoted, and a plain one must stay a number.
+#[test]
+fn a_comma_in_a_number_keeps_its_quotes() {
+    let p = Project::new("comma", SIMPLE);
+    p.write(
+        "config/locales/en.yml",
+        "en:\n  price: \"1,000\"\n  size: '2,5'\n  temp: -1,5\n",
+    );
+    let before = values(&p.store());
+    assert_eq!(before["en.temp"], Value::Plain("-1,5".into()));
+
+    let (code, text) = p.run(&["normalize", "--write"]);
+    assert_eq!(code, 0, "{text}");
+    assert_eq!(
+        p.read("config/locales/en.yml"),
+        "---\nen:\n  price: '1,000'\n  size: '2,5'\n  temp: -1,5\n"
+    );
+    assert_eq!(values(&p.store()), before);
+    assert_eq!(p.run(&["check-normalized"]).0, 0);
+}
+
 #[test]
 fn check_normalized_never_writes() {
     let p = Project::new("nowrite", SIMPLE);
