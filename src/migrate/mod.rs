@@ -98,20 +98,33 @@ pub fn find_gem_config(root: &Path) -> Option<PathBuf> {
 /// # Errors
 ///
 /// The gem config does not parse as YAML once its ERB is stripped, is not a
-/// mapping, or has a non-string key.
+/// mapping, has a duplicate key, or has a non-string key.
 pub fn migrate(src: &str, from: &Path, to: &Path) -> Result<Migration, String> {
     let stripped = strip_erb(src);
     let lines: Vec<&str> = stripped.text.lines().collect();
 
-    let node = yaml::parse(&stripped.text, from)
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| {
-            format!(
-                "{}: no settings found. After the ERB was removed the file held \
+    let (node, shadowed) =
+        yaml::parse_with_shadowed(&stripped.text, from).map_err(|e| e.to_string())?;
+    // The output is copied from the source by line ranges, and a shadowed
+    // block has no range that is safe to drop.
+    if let Some(d) = shadowed.first() {
+        return Err(format!(
+            "{}:{}: `{}` appears twice (lines {} and {}). Psych reads only the last \
+             one. Remove or merge the first one and run the migration again.",
+            from.display(),
+            d.by_line,
+            d.key,
+            d.line,
+            d.by_line
+        ));
+    }
+    let node = node.ok_or_else(|| {
+        format!(
+            "{}: no settings found. After the ERB was removed the file held \
                  nothing but comments.",
-                from.display()
-            )
-        })?;
+            from.display()
+        )
+    })?;
     let top = node
         .as_map()
         .ok_or_else(|| format!("{}: config must be a YAML mapping", from.display()))?;
@@ -368,6 +381,36 @@ mod tests {
         )
         .unwrap_err();
         assert!(e.contains("flow style"), "{e}");
+    }
+
+    /// Psych keeps the last of two duplicate keys. The migration copies text
+    /// by line ranges, so it cannot drop the first block safely.
+    #[test]
+    fn a_duplicate_key_is_refused_with_its_lines() {
+        for src in [
+            "ignore_unused:\n  - legacy.*\ntranslation:\n  backend: deepl\nignore_unused:\n  - dynamic.*\n",
+            "search:\n  paths: [app/]\nlocales: [de, en]\nsearch:\n  strict: true\n  paths: [lib/]\n",
+            "search:\n  paths: [app/]\n  paths: [lib/]\n",
+        ] {
+            let e = migrate(
+                src,
+                Path::new("config/i18n-tasks.yml"),
+                Path::new(MIGRATION_TARGET),
+            )
+            .unwrap_err();
+            assert!(e.contains("appears twice"), "{e}");
+        }
+        let e = migrate(
+            "base_locale: de\nignore_unused:\n  - a\nignore_unused:\n  - b\n",
+            Path::new("config/i18n-tasks.yml"),
+            Path::new(MIGRATION_TARGET),
+        )
+        .unwrap_err();
+        assert_eq!(
+            e,
+            "config/i18n-tasks.yml:4: `ignore_unused` appears twice (lines 2 and 4). \
+             Psych reads only the last one. Remove or merge the first one and run the migration again."
+        );
     }
 
     /// Every nested setting the gem has and this tool does not gets its own
