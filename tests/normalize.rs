@@ -132,6 +132,23 @@ fn a_comma_in_a_number_keeps_its_quotes() {
     assert_eq!(p.run(&["check-normalized"]).0, 0);
 }
 
+/// Rails keeps the last of two duplicate keys. `normalize` must write that
+/// value, not a merge of both blocks.
+#[test]
+fn a_duplicate_key_keeps_the_last_value() {
+    let p = Project::new("duplicate", SIMPLE);
+    p.write(
+        "config/locales/en.yml",
+        "en:\n  a:\n    b: y\n  a: x\n  users:\n    old: O\n    name: N1\n  users:\n    name: N2\n",
+    );
+    let (code, text) = p.run(&["normalize", "--write"]);
+    assert_eq!(code, 0, "{text}");
+    assert_eq!(
+        p.read("config/locales/en.yml"),
+        "---\nen:\n  a: x\n  users:\n    name: N2\n"
+    );
+}
+
 #[test]
 fn check_normalized_never_writes() {
     let p = Project::new("nowrite", SIMPLE);

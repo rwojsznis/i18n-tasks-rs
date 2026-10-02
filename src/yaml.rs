@@ -14,6 +14,7 @@
 
 use regex::Regex;
 use saphyr_parser::{Event, Parser, ScalarStyle, Span};
+use std::collections::HashMap;
 use std::fmt;
 use std::path::Path;
 use std::sync::LazyLock;
@@ -354,8 +355,16 @@ fn build(events: &[(Event, Span)], mut i: usize, path: &str) -> Result<(Node, us
         }
         Event::MappingStart(..) => {
             i += 1;
-            let mut entries = Vec::new();
+            let mut entries: Vec<(Node, Node)> = Vec::new();
+            // Psych keeps the last value of a duplicate key, at the position
+            // of the first one. The tool keys data by text, so `1` and `'1'`
+            // are one key here, though Psych keeps both.
+            let mut seen: HashMap<&str, usize> = HashMap::new();
             while i < events.len() && !matches!(events[i].0, Event::MappingEnd) {
+                let key_text = match &events[i].0 {
+                    Event::Scalar(v, ..) => Some(v.as_ref()),
+                    _ => None,
+                };
                 let (k, next) = build(events, i, path)?;
                 // ref: the gem relies on Psych rejecting `<<` merge keys only
                 // when aliases are off. The tool rejects the key outright.
@@ -367,8 +376,15 @@ fn build(events: &[(Event, Span)], mut i: usize, path: &str) -> Result<(Node, us
                     });
                 }
                 let (v, next2) = build(events, next, path)?;
-                entries.push((k, v));
                 i = next2;
+                if let Some(text) = key_text {
+                    if let Some(&at) = seen.get(text) {
+                        entries[at] = (k, v);
+                        continue;
+                    }
+                    seen.insert(text, entries.len());
+                }
+                entries.push((k, v));
             }
             Ok((Node::Map { entries, line }, i + 1))
         }
@@ -407,6 +423,36 @@ mod tests {
         let e = p("en:\n  a: &x 1\n  b: *x\n").unwrap_err();
         assert_eq!(e.line, 2);
         assert!(e.message.contains("anchors"));
+    }
+
+    /// Psych keeps the last value of a duplicate key, at the position of the
+    /// first one. A merge of the two would bring back keys Rails never sees.
+    #[test]
+    fn the_last_duplicate_key_wins() {
+        let n = p("en:\n  a:\n    b: y\n  c: 1\n  a: x\nen:\n  d: z\n  a: w\n")
+            .unwrap()
+            .unwrap();
+        let root = n.as_map().unwrap();
+        assert_eq!(root.len(), 1);
+        let en = n.map_get("en").unwrap();
+        let keys: Vec<_> = en
+            .as_map()
+            .unwrap()
+            .iter()
+            .map(|(k, _)| k.as_str())
+            .collect();
+        assert_eq!(keys, [Some("d"), Some("a")]);
+        assert_eq!(en.map_get("a").unwrap().as_str(), Some("w"));
+
+        let n = p("a:\n  b: y\nc: 1\n'a': x\n").unwrap().unwrap();
+        let keys: Vec<_> = n
+            .as_map()
+            .unwrap()
+            .iter()
+            .map(|(k, _)| k.as_str())
+            .collect();
+        assert_eq!(keys, [Some("a"), Some("c")]);
+        assert_eq!(n.map_get("a").unwrap().as_str(), Some("x"));
     }
 
     #[test]
