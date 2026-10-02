@@ -122,7 +122,6 @@ fn a_dynamic_scope_is_a_pattern_or_opaque() {
     t('a.', scope: [:x, category])
     t(:c, scope: CONST)
     t(:m, scope: method_call)
-    t(:n, scope: nil)
     t(:v, scope: [category])
   end
 end
@@ -139,7 +138,6 @@ end
         vec![
             "t(:c, scope: CONST)",
             "t(:m, scope: method_call)",
-            "t(:n, scope: nil)",
             "t(:v, scope: [category])"
         ]
     );
@@ -155,18 +153,21 @@ fn a_static_scope_is_prepended() {
     assert_eq!(sorted_unique_keys(&scan), vec!["x.c", "x.y.a", "x.y.b"]);
 }
 
+/// The gem drops these calls (its PR #731). Rails drops `nil` and `[]` from a
+/// scope, so `I18n.t(:a, scope: nil)` reads `a`, and `[:x, nil]` reads `x.a`.
 #[test]
-fn a_falsey_scope_differs_from_an_absent_scope() {
-    // See PR #731. `Array(nil)` is empty, and an empty scope is a ScopeError.
-    // `nil` and a method call are the same node to the scanner, so the call
-    // is opaque.
-    let scan = scan_source("t('a', scope: nil)\n", "app/models/m.rb");
-    assert!(scan.keys.is_empty(), "{:?}", scan.keys);
-    assert_eq!(scan.opaque.len(), 1);
-    assert_eq!(
-        sorted_unique_keys(&scan_source("t('a')\n", "app/models/m.rb")),
-        vec!["a"]
-    );
+fn nil_and_empty_scopes_are_dropped_as_in_rails() {
+    for (src, want) in [
+        ("t('a', scope: nil)\n", "a"),
+        ("t('a', scope: [])\n", "a"),
+        ("t('a', scope: [nil])\n", "a"),
+        ("t('a', scope: [:x, nil])\n", "x.a"),
+        ("t('a', scope: [nil, :x, []])\n", "x.a"),
+    ] {
+        let scan = scan_source(src, "app/models/m.rb");
+        assert_eq!(sorted_unique_keys(&scan), vec![want], "{src}");
+        assert!(scan.opaque.is_empty(), "{src}: {:?}", scan.opaque);
+    }
 }
 
 #[test]
@@ -567,10 +568,6 @@ I18n.t("success", scope: scope)
             "I18n.t(\"success\", scope: scope)"
         ]
     );
-    // An empty scope list is a ScopeError, the same as a non-literal one.
-    let scan = scan_source("t('a', scope: [])\n", "app/models/m.rb");
-    assert!(scan.keys.is_empty(), "{:?}", scan.keys);
-    assert_eq!(scan.opaque.len(), 1);
 }
 
 /// ref: accepted difference 4. The gem re-parents a `before_action` lambda's

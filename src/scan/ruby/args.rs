@@ -17,6 +17,9 @@ pub(super) enum ArgVal {
     Unresolvable,
     /// A call node, or anything else the gem maps to `nil`.
     Nil,
+    /// A literal `nil`. As a key it is opaque, like `Nil`. In a scope Rails
+    /// drops it, so it must not become a wildcard.
+    NilLit,
     /// Blocker B5: an interpolated string or symbol, reduced to a key pattern.
     Pattern(String),
 }
@@ -65,6 +68,9 @@ fn reduce(node: &pr::Node) -> ArgVal {
     }
     if let Some(n) = node.as_symbol_node() {
         return ArgVal::Str(String::from_utf8_lossy(n.unescaped()).into_owned());
+    }
+    if node.as_nil_node().is_some() {
+        return ArgVal::NilLit;
     }
     if node.as_integer_node().is_some() {
         return ArgVal::Int;
@@ -138,41 +144,50 @@ pub(super) struct KeyScope {
 /// The gem drops the call when an entry is not a String or Symbol. Blocker B5
 /// forbids that. A variable, constant or call entry becomes `*`, not `*:`,
 /// because a scope often holds a dotted path such as `'admin.users'`.
+///
+/// The gem also drops `scope: nil` and `scope: []` (its PR #731). Rails
+/// flattens the scope and drops `nil` and `[]`, so here they are no scope.
 pub(super) fn resolve_scope(kwargs: &[(String, ArgVal)]) -> Result<Option<KeyScope>, ScopeError> {
     let Some((_, value)) = kwargs.iter().find(|(k, _)| k == "scope") else {
         return Ok(None);
     };
-    let items = match value {
-        ArgVal::Arr(items) => items.as_slice(),
-        ArgVal::Str(_) | ArgVal::Pattern(_) => std::slice::from_ref(value),
-        _ => return Err(ScopeError),
-    };
-    // `Array(nil)` is empty, and an empty scope is a ScopeError. See PR #731:
-    // a falsey scope and an absent scope are different cases.
-    if items.is_empty() {
-        return Err(ScopeError);
-    }
-    let mut parts = Vec::with_capacity(items.len());
+    let mut parts = Vec::new();
     let mut dynamic = false;
-    for item in items {
-        match item {
-            ArgVal::Str(s) => parts.push(s.as_str()),
-            ArgVal::Pattern(p) => {
-                parts.push(p.as_str());
-                dynamic = true;
-            }
-            ArgVal::Unresolvable | ArgVal::Nil => {
-                parts.push("*");
-                dynamic = true;
-            }
-            ArgVal::Int | ArgVal::Arr(_) | ArgVal::Hash(_) => return Err(ScopeError),
-        }
+    scope_parts(value, &mut parts, &mut dynamic)?;
+    if parts.is_empty() {
+        return Ok(None);
     }
     let text = parts.join(".");
     if is_all_wildcard(&text) {
         return Err(ScopeError);
     }
     Ok(Some(KeyScope { text, dynamic }))
+}
+
+fn scope_parts<'a>(
+    value: &'a ArgVal,
+    parts: &mut Vec<&'a str>,
+    dynamic: &mut bool,
+) -> Result<(), ScopeError> {
+    match value {
+        ArgVal::Str(s) => parts.push(s),
+        ArgVal::Pattern(p) => {
+            parts.push(p);
+            *dynamic = true;
+        }
+        ArgVal::Unresolvable | ArgVal::Nil => {
+            parts.push("*");
+            *dynamic = true;
+        }
+        ArgVal::NilLit => {}
+        ArgVal::Arr(items) => {
+            for item in items {
+                scope_parts(item, parts, dynamic)?;
+            }
+        }
+        ArgVal::Int | ArgVal::Hash(_) => return Err(ScopeError),
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -231,7 +246,8 @@ mod tests {
         }
 
         // Reported as opaque: everything the gem maps to `nil`.
-        for src in ["t(nil)", "t(build_key)", "t({a: 1})", "t(1..2)"] {
+        assert_eq!(reduce_argument("t(nil)"), ArgVal::NilLit);
+        for src in ["t(build_key)", "t({a: 1})", "t(1..2)"] {
             assert_eq!(reduce_argument(src), ArgVal::Nil, "{src}");
         }
 

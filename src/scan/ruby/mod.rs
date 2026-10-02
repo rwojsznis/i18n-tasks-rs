@@ -290,7 +290,11 @@ impl<'a> Visitor<'a> {
             Err(ScopeError) => {
                 if matches!(
                     first,
-                    ArgVal::Str(_) | ArgVal::Pattern(_) | ArgVal::Unresolvable | ArgVal::Nil
+                    ArgVal::Str(_)
+                        | ArgVal::Pattern(_)
+                        | ArgVal::Unresolvable
+                        | ArgVal::Nil
+                        | ArgVal::NilLit
                 ) {
                     self.push_opaque(&loc);
                 }
@@ -337,7 +341,7 @@ impl<'a> Visitor<'a> {
                 self.push_pattern(resolved[0].clone(), occ);
             }
             // Blocker B5: never treat an opaque call as "no keys used".
-            ArgVal::Unresolvable | ArgVal::Nil => self.push_opaque(&loc),
+            ArgVal::Unresolvable | ArgVal::Nil | ArgVal::NilLit => self.push_opaque(&loc),
             // An integer, array or hash key resolves to nothing, as in the gem.
             _ => {}
         }

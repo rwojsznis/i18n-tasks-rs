@@ -222,23 +222,24 @@ fn match_to_key(
     let Some(key) = absolute_key(&strip_literal(arg), path, cfg) else {
         return Ok(None);
     };
-    match scope {
-        Some(scope) => {
-            let scope = extract_scope_parts(scope).ok_or(OpaqueScope)?.join(".");
-            if ruby::is_all_wildcard(&scope) {
-                return Err(OpaqueScope);
-            }
-            Ok(Some(ScopedKey { scope, key }))
-        }
-        // Without a scope, an expression argument is dropped: only a literal
-        // starts with something other than a word character. Ruby's `\w` is
-        // ASCII-only. ref: pattern_with_scope_scanner.rb:32
-        None if arg.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_') => Ok(None),
-        None => Ok(Some(ScopedKey {
-            scope: String::new(),
-            key,
-        })),
+    // Rails drops `nil` and `[]` from a scope, so they leave it empty. An
+    // empty match is different: the scope is there, but `CALL_RE` could not
+    // read it.
+    let scope = match scope {
+        Some(scope) if scope.trim().is_empty() => return Err(OpaqueScope),
+        Some(scope) => extract_scope_parts(scope).ok_or(OpaqueScope)?.join("."),
+        None => String::new(),
+    };
+    // Without a scope, an expression argument is dropped: only a literal
+    // starts with something other than a word character. Ruby's `\w` is
+    // ASCII-only. ref: pattern_with_scope_scanner.rb:32
+    if scope.is_empty() && arg.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_') {
+        return Ok(None);
     }
+    if !scope.is_empty() && ruby::is_all_wildcard(&scope) {
+        return Err(OpaqueScope);
+    }
+    Ok(Some(ScopedKey { scope, key }))
 }
 
 /// ref: relative_keys.rb#absolute_key
@@ -324,7 +325,9 @@ fn extract_scope_parts(s: &str) -> Option<Vec<String>> {
 }
 
 fn consume_literal(acc: &mut String, literals: &mut Vec<String>) -> Option<()> {
-    if acc.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_' || c == '@') {
+    if acc == "nil" {
+        // Rails drops `nil` from a scope.
+    } else if acc.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_' || c == '@') {
         literals.push("*".to_string());
     } else if LITERAL_RE.is_match(acc.as_bytes()) {
         literals.push(strip_literal(acc));
@@ -573,7 +576,8 @@ mod tests {
             "= t :key, scope: [:a, sub(1)]",
             "= t :key, scope: [:a, h.c(1)]",
             "= t :key, scope: [:a, \"x#{b}\"]",
-            "= t :key, scope: []",
+            // `CALL_RE` stops at `%` and `#`, so the scope arrives empty.
+            "= t :key, scope: %i[a b]",
             "= t :key, scope: [:x, [:y]]",
             "= t :key, scope: (a)",
             "= t key, scope: (a)",
@@ -582,6 +586,10 @@ mod tests {
             assert!(patterns(src).is_empty(), "expected no pattern from {src}");
             assert_eq!(opaque(src), 1, "expected an opaque call from {src}");
         }
+        // Rails drops `nil` and `[]` from a scope.
+        assert_eq!(keys("= t :key, scope: []"), ["key"]);
+        assert_eq!(keys("= t :key, scope: nil"), ["key"]);
+        assert_eq!(keys("= t :key, scope: [:x, nil]"), ["x.key"]);
         // No scope at all: an expression key is dropped, as in the gem.
         assert_eq!(keys("= t key"), Vec::<String>::new());
         assert_eq!(opaque("= t key"), 0);
