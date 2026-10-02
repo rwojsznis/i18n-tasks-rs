@@ -757,4 +757,5 @@ does not read.
 
 **Here.** Every file that a `data.read` glob matches is read once, in sorted
 path order, as Rails reads it. An app that adds its own paths to
-`config.i18n.load_path` can still differ.
+`config.i18n.load_path` can still differ, so two files that give one key
+different values get a warning that names both files.

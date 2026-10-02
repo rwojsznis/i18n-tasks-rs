@@ -176,14 +176,15 @@ impl LocaleTree {
         out
     }
 
-    fn insert(&mut self, leaf: Leaf) {
-        // A later file overrides an earlier one, matching `reduce(:merge!)`.
+    /// Returns the leaf it replaced, and the index of the new one.
+    fn insert(&mut self, leaf: Leaf) -> Option<(Leaf, usize)> {
+        // A later file overrides an earlier one, as in Rails' load order.
         if let Some(&i) = self.index.get(&leaf.key) {
-            self.leaves[i] = leaf;
-            return;
+            return Some((std::mem::replace(&mut self.leaves[i], leaf), i));
         }
         self.index.insert(leaf.key.clone(), self.leaves.len());
         self.leaves.push(leaf);
+        None
     }
 
     /// The immediate child segment names of `key`.
@@ -467,7 +468,7 @@ fn flatten(
             if prefix.is_empty() {
                 return Ok(());
             }
-            out.insert(Leaf {
+            let replaced = out.insert(Leaf {
                 key: prefix.join("."),
                 value: to_value(node, path, false)?,
                 // `flatten` recurses once per level, so the stack gives out
@@ -483,6 +484,22 @@ fn flatten(
                         .into_boxed_slice()
                 }),
             });
+            // The sorted order is Rails' default. An app that adds its own
+            // paths to `config.i18n.load_path` can read the files in another
+            // order, so a disagreement is worth a look.
+            if let Some((old, i)) = replaced {
+                let new = &out.leaves[i];
+                if old.path != new.path && old.value != new.value {
+                    warnings.push(format!(
+                        "`{}.{}` has different values in {} and {}. The tool keeps the \
+                         value from the second file, which Rails reads last by default.",
+                        out.locale,
+                        new.key,
+                        old.path.display(),
+                        new.path.display()
+                    ));
+                }
+            }
             Ok(())
         }
     }

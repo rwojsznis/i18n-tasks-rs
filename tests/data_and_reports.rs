@@ -200,6 +200,30 @@ fn files_are_read_in_sorted_path_order() {
     }
 }
 
+/// An app can add its own paths to `config.i18n.load_path`, so the sorted
+/// order is not always what Rails reads. Two files that disagree on a key are
+/// worth a warning; two that agree are not.
+#[test]
+fn two_files_that_disagree_on_a_key_warn() {
+    let p = Project::new("cross-file");
+    p.write("config/locales/a.en.yml", "en:\n  k: from-a\n  same: S\n")
+        .write("config/locales/b.en.yml", "en:\n  k: from-b\n  same: S\n");
+    let cfg = p.config(
+        "base_locale: en\nlocales: [en]\ndata:\n  read:\n    - config/locales/*.%{locale}.yml\n",
+    );
+    let store = Store::load(&cfg).unwrap();
+    assert_eq!(store.warnings.len(), 1, "{:?}", store.warnings);
+    let w = &store.warnings[0];
+    assert!(w.starts_with("`en.k` has different values in "), "{w}");
+    assert!(
+        w.ends_with(
+            "config/locales/b.en.yml. The tool keeps the value from the second file, \
+             which Rails reads last by default."
+        ),
+        "{w}"
+    );
+}
+
 #[test]
 fn locales_are_inferred_from_the_data_when_unset() {
     let p = Project::new("infer");
