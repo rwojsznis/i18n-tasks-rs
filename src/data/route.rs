@@ -332,7 +332,7 @@ mod tests {
             external: HashMap::default(),
             warnings: Vec::new(),
         };
-        assert!(origin_paths(&store, "de").is_empty());
+        assert_eq!(origin_paths(&store, "de"), Vec::<PathBuf>::new());
     }
 
     #[test]

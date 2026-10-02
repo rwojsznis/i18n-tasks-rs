@@ -143,9 +143,9 @@ mod tests {
             Path::new("app/views/x/index.html.erb"),
             &cfg,
         );
-        assert!(out.keys.is_empty());
-        assert!(out.patterns.is_empty());
-        assert!(out.opaque.is_empty());
+        assert!(out.keys.is_empty(), "{:?}", out.keys);
+        assert!(out.patterns.is_empty(), "{:?}", out.patterns);
+        assert!(out.opaque.is_empty(), "{:?}", out.opaque);
     }
 
     #[test]

@@ -220,7 +220,7 @@ mod tests {
                      \x20 backend: openai\n");
         assert_eq!(m.kept, ["base_locale", "data", "search"]);
         assert_eq!(m.erb_lines, [1]);
-        assert!(m.manual.is_empty());
+        assert!(m.manual.is_empty(), "{:?}", m.manual);
         let dropped: Vec<&str> = m.dropped.iter().map(|d| d.key.as_str()).collect();
         assert_eq!(
             dropped,
@@ -280,7 +280,7 @@ mod tests {
         // list holding one blank path.
         let cfg =
             Config::parse(&m.output, Path::new(MIGRATION_TARGET), PathBuf::from(".")).unwrap();
-        assert!(cfg.data.external.is_empty());
+        assert!(cfg.data.external.is_empty(), "{:?}", cfg.data.external);
         assert_eq!(cfg.data.read, ["config/locales/%{locale}.yml"]);
     }
 
@@ -296,7 +296,7 @@ mod tests {
         assert!(m.dropped.iter().any(|d| d.key == "data.external"));
         let cfg =
             Config::parse(&m.output, Path::new(MIGRATION_TARGET), PathBuf::from(".")).unwrap();
-        assert!(cfg.data.external.is_empty());
+        assert!(cfg.data.external.is_empty(), "{:?}", cfg.data.external);
         assert!(!m.output.contains("vendor/locales"), "{}", m.output);
     }
 
@@ -348,7 +348,7 @@ mod tests {
                      \x20     only: %w(*.slim) %>\n\
                      base_locale: de\n");
         assert_eq!(m.erb_lines, [1, 2]);
-        assert!(m.manual.is_empty());
+        assert!(m.manual.is_empty(), "{:?}", m.manual);
         assert!(m.output.contains("base_locale: de"));
     }
 

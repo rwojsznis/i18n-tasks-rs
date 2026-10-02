@@ -91,8 +91,8 @@ fn slim_spec_source() {
         .collect();
     assert_eq!(lines, vec![1, 2]);
     // `bientôt !` must not read as a `t` call. ref: issue #526.
-    assert!(scan.opaque.is_empty());
-    assert!(scan.patterns.is_empty());
+    assert!(scan.opaque.is_empty(), "{:?}", scan.opaque);
+    assert!(scan.patterns.is_empty(), "{:?}", scan.patterns);
 }
 
 /// The differential harness fixture, whose 43 lines are a catalogue of the
@@ -185,7 +185,7 @@ fn fixture_app_relative_slim() {
 fn fixture_app_javascript() {
     let scan = scan_fixture("app/assets/javascripts/application.js");
     // `//= require t` is a comment line, and `Matrix.t(this)` has a receiver.
-    assert!(keys(&scan).is_empty());
+    assert_eq!(keys(&scan), Vec::<String>::new());
 }
 
 /// A custom `SlimMultilineScanner`, of the kind projects bolt on to the gem,
@@ -253,7 +253,7 @@ fn dynamic_template_keys_become_patterns() {
         Path::new("app/views/static/_about_card.html.slim"),
         &cfg(),
     );
-    assert!(scan.keys.is_empty());
+    assert!(scan.keys.is_empty(), "{:?}", scan.keys);
     assert_eq!(
         scan.patterns
             .iter()

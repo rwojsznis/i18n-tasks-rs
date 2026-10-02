@@ -270,7 +270,10 @@ mod tests {
             vec!["a/a/a.rb", "a/a/a/a.rb", "a/a/b.rb", "a/b/a.rb"]
         );
         // A configured path that does not exist is skipped, not an error.
-        assert!(found(&root, "search:\n  paths: [nowhere]\n").is_empty());
+        assert_eq!(
+            found(&root, "search:\n  paths: [nowhere]\n"),
+            Vec::<String>::new()
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -309,7 +312,7 @@ mod tests {
             "search:\n  paths: [.]\n  only: ['{}/a/b/**']\n",
             root.display()
         );
-        assert!(found(&root, &absolute).is_empty());
+        assert_eq!(found(&root, &absolute), Vec::<String>::new());
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -358,15 +361,21 @@ mod tests {
             vec![".hidden/a.rb"]
         );
         // A hidden file is not, because its own basename opens with a dot.
-        assert!(found(&root, "search:\n  paths: ['.dotfile.rb']\n").is_empty());
-        assert!(
+        assert_eq!(
+            found(&root, "search:\n  paths: ['.dotfile.rb']\n"),
+            Vec::<String>::new()
+        );
+        assert_eq!(
             found(
                 &root,
                 "search:\n  paths: [a/b/a.rb]\n  exclude: ['a/b/a.rb']\n"
-            )
-            .is_empty()
+            ),
+            Vec::<String>::new()
         );
-        assert!(found(&root, "search:\n  paths: [a/b/a.rb]\n  only: ['a/a/**']\n").is_empty());
+        assert_eq!(
+            found(&root, "search:\n  paths: [a/b/a.rb]\n  only: ['a/a/**']\n"),
+            Vec::<String>::new()
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -383,7 +392,7 @@ mod tests {
         let finder = Finder::new(&cfg).unwrap();
         let mut out = Vec::new();
         finder.consider(root.join(OsStr::from_bytes(b"bad\xff.rb")), &mut out);
-        assert!(out.is_empty());
+        assert!(out.is_empty(), "{out:?}");
         // A name that is valid UTF-8 goes through.
         finder.consider(root.join("a.rb"), &mut out);
         assert_eq!(out.len(), 1);

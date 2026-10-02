@@ -97,11 +97,8 @@ fn a_static_scope_is_prepended() {
 #[test]
 fn a_falsey_scope_differs_from_an_absent_scope() {
     // See PR #731. `Array(nil)` is empty, and an empty scope is a ScopeError.
-    assert!(
-        scan_source("t('a', scope: nil)\n", "app/models/m.rb")
-            .keys
-            .is_empty()
-    );
+    let keys = scan_source("t('a', scope: nil)\n", "app/models/m.rb").keys;
+    assert!(keys.is_empty(), "{keys:?}");
     assert_eq!(
         sorted_unique_keys(&scan_source("t('a')\n", "app/models/m.rb")),
         vec!["a"]
@@ -217,7 +214,7 @@ fn the_extension_picks_the_scanner() {
     let slim = scan_file(b"= t '.title'", Path::new("app/views/x.html.slim"), &cfg());
     assert_eq!(slim.keys[0].0, "x.title");
     let none = scan_file(b"nothing here", Path::new("app/views/x.txt"), &cfg());
-    assert!(none.keys.is_empty());
+    assert!(none.keys.is_empty(), "{:?}", none.keys);
 }
 
 /// ref: spec/prism_scanner_spec.rb "i18n-tasks-use - malformed payload does not
@@ -291,7 +288,7 @@ fn a_first_argument_that_is_not_a_key_yields_nothing() {
         assert!(scan.opaque.is_empty(), "{src}: {:?}", scan.opaque);
     }
     let scan = scan_source("t\nt()\n", "app/models/m.rb");
-    assert!(scan.keys.is_empty());
+    assert!(scan.keys.is_empty(), "{:?}", scan.keys);
     assert!(scan.opaque.is_empty(), "{:?}", scan.opaque);
     // A braced hash literal is not a key, but it is not "no keys used"
     // either, so it is reported. ref: accepted difference 2.
@@ -330,7 +327,7 @@ fn a_module_body_does_not_resolve_a_relative_key() {
 fn a_relative_pattern_without_a_context_is_dropped() {
     let scan = scan_source("t(\".#{x}.title\")\n", "lib/tasks/thing.rb");
     assert!(scan.patterns.is_empty(), "{:?}", scan.patterns);
-    assert!(scan.keys.is_empty());
+    assert!(scan.keys.is_empty(), "{:?}", scan.keys);
 }
 
 /// An interpolation nested inside an interpolation still collapses to one
@@ -493,11 +490,8 @@ I18n.t("success", scope: scope)
     // than dropped. ref: accepted difference 2.
     assert_eq!(scan.opaque.len(), 1, "{:?}", scan.opaque);
     // An empty scope list is a ScopeError, the same as a non-literal one.
-    assert!(
-        scan_source("t('a', scope: [])\n", "app/models/m.rb")
-            .keys
-            .is_empty()
-    );
+    let keys = scan_source("t('a', scope: [])\n", "app/models/m.rb").keys;
+    assert!(keys.is_empty(), "{keys:?}");
 }
 
 /// ref: accepted difference 4. The gem re-parents a `before_action` lambda's

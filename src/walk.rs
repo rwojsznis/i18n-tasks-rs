@@ -133,6 +133,6 @@ mod tests {
     fn a_directory_that_is_not_there_is_skipped() {
         let root = std::env::temp_dir().join("i18n-tasks-rs-walk-nowhere");
         let _ = std::fs::remove_dir_all(&root);
-        assert!(seen(&root).is_empty());
+        assert_eq!(seen(&root), Vec::<String>::new());
     }
 }

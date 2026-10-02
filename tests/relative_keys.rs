@@ -153,7 +153,10 @@ fn a_plain_class_resolves_relative_keys_only_under_a_configured_root() {
     );
     // Outside every configured root the key stays unresolved, as in the gem.
     let no_root = cfg(&["app/views"], &[]);
-    assert!(keys(src, "app/models/wizard_form.rb", &no_root).is_empty());
+    assert_eq!(
+        keys(src, "app/models/wizard_form.rb", &no_root),
+        Vec::<String>::new()
+    );
 }
 
 #[test]
@@ -184,7 +187,10 @@ fn a_foreign_receiver_is_skipped() {
     // ref: visitor.rb:99-101
     let c = cfg(&["app/controllers"], &[]);
     let src = "class UsersController < ApplicationController\n  def create\n    Service.translate(:what)\n  end\nend\n";
-    assert!(keys(src, "app/controllers/users_controller.rb", &c).is_empty());
+    assert_eq!(
+        keys(src, "app/controllers/users_controller.rb", &c),
+        Vec::<String>::new()
+    );
 }
 
 #[test]
