@@ -274,6 +274,31 @@ fn keep_order_puts_a_files_own_keys_before_routed_ones() {
     );
 }
 
+/// The router joins the root to a file path that already holds it. With a
+/// relative `--root`, that path did not exist, so the files moved to
+/// `p/p/config/locales`, or were deleted under `--allow-delete`.
+#[test]
+fn a_relative_root_writes_the_files_in_place() {
+    let p = Project::new("relative-root", SIMPLE);
+    p.write("config/locales/en.yml", "en:\n  b: B\n  a: A\n");
+    let name = p.root.file_name().unwrap().to_str().unwrap().to_string();
+    let out = Command::new(BIN)
+        .args(["normalize", "--write", "--allow-delete", "-c"])
+        .arg(format!("{name}/config/i18n-tasks.yml"))
+        .arg("--root")
+        .arg(&name)
+        .current_dir(p.root.parent().unwrap())
+        .output()
+        .expect("binary runs");
+    let text = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(0), "{text}");
+    assert_eq!(
+        p.read("config/locales/en.yml"),
+        "---\nen:\n  a: A\n  b: B\n"
+    );
+    assert!(!p.root.join(&name).exists(), "wrote under {name}/{name}");
+}
+
 #[test]
 fn check_normalized_never_writes() {
     let p = Project::new("nowrite", SIMPLE);
