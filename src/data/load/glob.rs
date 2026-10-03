@@ -10,7 +10,12 @@ use std::path::{Path, PathBuf};
 /// Expands a glob relative to `root`.
 pub(super) fn glob_paths(root: &Path, pattern: &str) -> Vec<PathBuf> {
     let pattern = pattern.replace('\\', "/");
-    let parts: Vec<&str> = pattern.split('/').filter(|p| !p.is_empty()).collect();
+    // A `.` part would give a second spelling of the same path, and the
+    // spellings sort apart.
+    let parts: Vec<&str> = pattern
+        .split('/')
+        .filter(|p| !p.is_empty() && *p != ".")
+        .collect();
     let mut current = vec![root.to_path_buf()];
     for (i, part) in parts.iter().enumerate() {
         let last = i + 1 == parts.len();

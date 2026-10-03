@@ -146,6 +146,8 @@ pub struct LocaleTree {
     interior: HashSet<String>,
     /// Immediate child segment names, in insertion order.
     children: HashMap<String, Vec<String>>,
+    /// Slots of leaves that a later file replaced. `finish` drops them.
+    moved: Vec<usize>,
     /// Keys whose children are all leaves with a plural suffix.
     /// ref: lib/i18n/tasks/plural_keys.rb#plural_forms?
     plural_nodes: HashSet<String>,
@@ -176,14 +178,30 @@ impl LocaleTree {
         out
     }
 
-    fn insert(&mut self, leaf: Leaf) {
-        // A later file overrides an earlier one, matching `reduce(:merge!)`.
-        if let Some(&i) = self.index.get(&leaf.key) {
-            self.leaves[i] = leaf;
-            return;
+    /// When the key came from another file, returns the old and the new
+    /// slot. The old one stays readable until `finish`.
+    fn insert(&mut self, leaf: Leaf) -> Option<(usize, usize)> {
+        // A later file overrides an earlier one, as in Rails' load order.
+        let new = self.leaves.len();
+        match self.index.get(&leaf.key) {
+            Some(&old) if self.leaves[old].path == leaf.path => {
+                self.leaves[old] = leaf;
+                None
+            }
+            // The key moves to the later file's position, so that file keeps
+            // its own key order under `keep_order`.
+            Some(&old) => {
+                self.index.insert(leaf.key.clone(), new);
+                self.leaves.push(leaf);
+                self.moved.push(old);
+                Some((old, new))
+            }
+            None => {
+                self.index.insert(leaf.key.clone(), new);
+                self.leaves.push(leaf);
+                None
+            }
         }
-        self.index.insert(leaf.key.clone(), self.leaves.len());
-        self.leaves.push(leaf);
     }
 
     /// The immediate child segment names of `key`.
@@ -204,6 +222,20 @@ impl LocaleTree {
     }
 
     fn finish(&mut self) {
+        if !self.moved.is_empty() {
+            let moved: HashSet<usize> = self.moved.drain(..).collect();
+            let mut i = 0;
+            self.leaves.retain(|_| {
+                i += 1;
+                !moved.contains(&(i - 1))
+            });
+            self.index = self
+                .leaves
+                .iter()
+                .enumerate()
+                .map(|(i, l)| (l.key.clone(), i))
+                .collect();
+        }
         // One pass to record ancestors and immediate children. Doing this once
         // keeps `depluralize_key` constant time instead of a scan per key.
         //
@@ -351,6 +383,26 @@ fn normalize_locale_list(locales: &[String], base: &str) -> Vec<String> {
     out
 }
 
+/// The files of `patterns`, each once, in the order Rails reads them.
+///
+/// Rails globs `config/locales/**/*.{rb,yml}` and sorts the paths as strings,
+/// whatever order the `data.read` globs are in. The gem instead reads a file
+/// once per glob that matches it, which is wrong when a narrow glob comes
+/// last. Accepted diff 33.
+fn read_order(cfg: &Config, locale: &str, patterns: &[String]) -> Vec<PathBuf> {
+    let mut paths: Vec<PathBuf> = patterns
+        .iter()
+        .flat_map(|p| glob_paths(&cfg.root, &interpolate_locale(p, locale)))
+        .collect();
+    paths.sort_by(|a, b| {
+        a.as_os_str()
+            .as_encoded_bytes()
+            .cmp(b.as_os_str().as_encoded_bytes())
+    });
+    paths.dedup();
+    paths
+}
+
 /// ref: lib/i18n/tasks/data/file_system_base.rb#read_locale
 fn read_locale(
     cfg: &Config,
@@ -364,54 +416,43 @@ fn read_locale(
         locale: locale.to_string(),
         ..Default::default()
     };
-    let mut seen: HashSet<PathBuf> = HashSet::new();
-    for pattern in patterns {
-        let concrete = interpolate_locale(pattern, locale);
-        for path in glob_paths(&cfg.root, &concrete) {
-            // A real-world config has two overlapping `data.read` globs, where the
-            // second matches every file the first does. Deduplicate by resolved
-            // path so a file is read once, in first-glob order.
-            if !seen.insert(path.clone()) {
+    for path in read_order(cfg, locale, patterns) {
+        let src = std::fs::read_to_string(&path)
+            .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+        let (root, shadowed) = yaml::parse_with_shadowed(&src, &path).map_err(|e| e.to_string())?;
+        for d in shadowed {
+            warnings.push(format!(
+                "{}:{}: `{}` appears again on line {}. Rails reads only the last one, \
+                 so the tool ignores this one and `normalize --write` removes it.",
+                path.display(),
+                d.line,
+                d.key,
+                d.by_line
+            ));
+        }
+        let Some(root) = root else {
+            continue;
+        };
+        let shared: Arc<Path> = Arc::from(path.as_path());
+        let Some(entries) = root.as_map() else {
+            return Err(format!(
+                "{}: expected a mapping at the top level",
+                path.display()
+            ));
+        };
+        tree.file_locales.insert(
+            path.clone(),
+            entries
+                .iter()
+                .filter_map(|(k, _)| k.as_str().map(str::to_string))
+                .collect(),
+        );
+        // Each file maps locale to data, and one file may hold several.
+        for (k, v) in entries {
+            if k.as_str() != Some(locale) {
                 continue;
             }
-            let src = std::fs::read_to_string(&path)
-                .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
-            let (root, shadowed) =
-                yaml::parse_with_shadowed(&src, &path).map_err(|e| e.to_string())?;
-            for d in shadowed {
-                warnings.push(format!(
-                    "{}:{}: `{}` appears again on line {}. Rails reads only the last one, \
-                     so the tool ignores this one and `normalize --write` removes it.",
-                    path.display(),
-                    d.line,
-                    d.key,
-                    d.by_line
-                ));
-            }
-            let Some(root) = root else {
-                continue;
-            };
-            let shared: Arc<Path> = Arc::from(path.as_path());
-            let Some(entries) = root.as_map() else {
-                return Err(format!(
-                    "{}: expected a mapping at the top level",
-                    path.display()
-                ));
-            };
-            tree.file_locales.insert(
-                path.clone(),
-                entries
-                    .iter()
-                    .filter_map(|(k, _)| k.as_str().map(str::to_string))
-                    .collect(),
-            );
-            // Each file maps locale to data, and one file may hold several.
-            for (k, v) in entries {
-                if k.as_str() != Some(locale) {
-                    continue;
-                }
-                flatten(v, &mut Vec::new(), &shared, &path, &mut tree, warnings)?;
-            }
+            flatten(v, &mut Vec::new(), &shared, &path, &mut tree, warnings)?;
         }
     }
     tree.finish();
@@ -458,7 +499,7 @@ fn flatten(
             if prefix.is_empty() {
                 return Ok(());
             }
-            out.insert(Leaf {
+            let replaced = out.insert(Leaf {
                 key: prefix.join("."),
                 value: to_value(node, path, false)?,
                 // `flatten` recurses once per level, so the stack gives out
@@ -474,6 +515,22 @@ fn flatten(
                         .into_boxed_slice()
                 }),
             });
+            // The sorted order is Rails' default. An app that adds its own
+            // paths to `config.i18n.load_path` can read the files in another
+            // order, so a disagreement is worth a look.
+            if let Some((old, new)) = replaced {
+                let (old, new) = (&out.leaves[old], &out.leaves[new]);
+                if old.value != new.value {
+                    warnings.push(format!(
+                        "`{}.{}` has different values in {} and {}. The tool keeps the \
+                         value from the second file, which Rails reads last by default.",
+                        out.locale,
+                        new.key,
+                        old.path.display(),
+                        new.path.display()
+                    ));
+                }
+            }
             Ok(())
         }
     }

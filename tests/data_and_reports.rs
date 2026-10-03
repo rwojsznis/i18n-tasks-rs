@@ -111,7 +111,7 @@ fn overlapping_read_globs_are_deduplicated_and_merge_in_order() {
         tree.get("b").unwrap().value,
         Value::Str("from other".into())
     );
-    // A later file wins, matching the gem's `reduce(:merge!)`.
+    // The file that sorts last wins, as in Rails. See accepted diff 33.
     assert_eq!(
         tree.get("shared").unwrap().value,
         Value::Str("other wins".into())
@@ -119,6 +119,109 @@ fn overlapping_read_globs_are_deduplicated_and_merge_in_order() {
     // Every key remembers its origin file, which the conservative router needs.
     assert!(tree.get("a").unwrap().path.ends_with("base.en.yml"));
     assert!(tree.get("b").unwrap().path.ends_with("other.en.yml"));
+}
+
+/// Rails reads every locale file in sorted path order, whatever order the
+/// globs are in, so the file that sorts last wins. Each case is checked with
+/// `Dir["config/locales/**/*.yml"].sort` and the i18n gem.
+#[test]
+fn files_are_read_in_sorted_path_order() {
+    /// Name, `data.read` globs, two files with their value of `k`, and the
+    /// value Rails reads.
+    type Case = (
+        &'static str,
+        &'static [&'static str],
+        [(&'static str, &'static str); 2],
+        &'static str,
+    );
+    let cases: [Case; 7] = [
+        (
+            "handoff",
+            &["%{locale}.yml", "*%{locale}.yml"],
+            [("en.yml", "from-en"), ("devise.en.yml", "from-devise")],
+            "from-en",
+        ),
+        (
+            "reversed",
+            &["*%{locale}.yml", "%{locale}.yml"],
+            [("en.yml", "from-en"), ("users.en.yml", "from-users")],
+            "from-users",
+        ),
+        (
+            "three",
+            &["%{locale}.yml", "**/*.%{locale}.yml", "**/%{locale}.yml"],
+            [("en.yml", "from-en"), ("users.en.yml", "from-users")],
+            "from-users",
+        ),
+        (
+            "base-first",
+            &["base.%{locale}.yml", "*.%{locale}.yml"],
+            [("about.en.yml", "from-about"), ("base.en.yml", "from-base")],
+            "from-base",
+        ),
+        (
+            "gem-template",
+            &["%{locale}.yml", "**/*.%{locale}.yml"],
+            [("en.yml", "from-en"), ("admin.en.yml", "from-admin")],
+            "from-en",
+        ),
+        (
+            "dir-vs-dot",
+            &["**/%{locale}.yml", "*.%{locale}.yml"],
+            [("devise/en.yml", "from-dir"), ("devise.en.yml", "from-dot")],
+            "from-dir",
+        ),
+        (
+            "dot-slash",
+            &["%{locale}.yml", "./*%{locale}.yml"],
+            [("en.yml", "from-en"), ("zz.en.yml", "from-zz")],
+            "from-zz",
+        ),
+    ];
+    for (name, globs, files, expected) in cases {
+        let p = Project::new(&format!("order-{name}"));
+        for (file, value) in files {
+            p.write(
+                &format!("config/locales/{file}"),
+                &format!("en:\n  k: {value}\n"),
+            );
+        }
+        let read = globs
+            .iter()
+            .map(|g| format!("    - config/locales/{g}\n"))
+            .collect::<Vec<_>>()
+            .concat();
+        let cfg = p.config(&format!(
+            "base_locale: en\nlocales: [en]\ndata:\n  read:\n{read}"
+        ));
+        let store = Store::load(&cfg).unwrap();
+        let k = store.tree("en").unwrap().get("k").unwrap();
+        assert_eq!(k.value, Value::Str(expected.into()), "{name}");
+    }
+}
+
+/// An app can add its own paths to `config.i18n.load_path`, so the sorted
+/// order is not always what Rails reads. Two files that disagree on a key are
+/// worth a warning; two that agree are not.
+#[test]
+fn two_files_that_disagree_on_a_key_warn() {
+    let p = Project::new("cross-file");
+    p.write("config/locales/a.en.yml", "en:\n  k: from-a\n  same: S\n")
+        .write("config/locales/b.en.yml", "en:\n  k: from-b\n  same: S\n");
+    let cfg = p.config(
+        "base_locale: en\nlocales: [en]\ndata:\n  read:\n    - config/locales/*.%{locale}.yml\n",
+    );
+    let store = Store::load(&cfg).unwrap();
+    assert_eq!(store.warnings.len(), 1, "{:?}", store.warnings);
+    let w = &store.warnings[0];
+    assert!(w.starts_with("`en.k` has different values in "), "{w}");
+    assert!(
+        w.ends_with(
+            "config/locales/b.en.yml. The tool keeps the value from the second file, \
+             which Rails reads last by default."
+        ),
+        "{w}"
+    );
 }
 
 #[test]

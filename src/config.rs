@@ -157,8 +157,8 @@ impl Config {
     /// # Errors
     ///
     /// The file cannot be read — the message then names the gem config, if one
-    /// is there to migrate — the working directory cannot be read when `root`
-    /// is `None`, or `parse` rejects the contents.
+    /// is there to migrate — the working directory cannot be read, or `parse`
+    /// rejects the contents.
     pub fn load(path: &Path, root: Option<&Path>) -> Result<Config, String> {
         let src = std::fs::read_to_string(path).map_err(|e| {
             let mut msg = format!("cannot read config {}: {e}", path.display());
@@ -176,8 +176,11 @@ impl Config {
             }
             msg
         })?;
+        // The routers join the root to paths that may already hold it. An
+        // absolute root makes both forms name the same file.
         let root = match root {
-            Some(r) => r.to_path_buf(),
+            Some(r) => std::path::absolute(r)
+                .map_err(|e| format!("cannot resolve root {}: {e}", r.display()))?,
             None => std::env::current_dir().map_err(|e| e.to_string())?,
         };
         Config::parse(&src, path, root)

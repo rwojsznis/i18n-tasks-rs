@@ -437,6 +437,10 @@ value, at the position of the first key. The reader used to keep both, so
 `normalize` merged the two blocks. It now keeps the last value, as Psych does,
 and warns with both line numbers. `migrate-config` refuses such a file.
 
+With overlapping `data.read` globs, the reader kept a file at its first
+position, so another file's copy of a key won, and `normalize` deleted the
+value Rails reads. See 33.
+
 ## 18. The emitter never folds a line
 
 Psych folds at `line_width`, and the gem then strips the trailing spaces that
@@ -737,3 +741,25 @@ A run that finds something reports in full: the flag suppresses the passing
 report, not the failing one. It also suppresses no warning and no tool failure
 — an unreadable config or an empty data set still says so on stderr and still
 exits 2. Exit codes are unchanged.
+
+## 33. Locale files are read in sorted path order — bug fix
+
+**Gem.** `file_system_base.rb#read_locale` reads a file once per `data.read`
+glob that matches it, in glob order, and the last read wins. With
+`%{locale}.yml` and then `*%{locale}.yml`, `en.yml` is read last. With the
+globs the other way round, it is also read last.
+
+**Rails.** The default `config.i18n.load_path` is
+`config/locales/**/*.{rb,yml}`, sorted as strings. So `users.en.yml` is read
+after `en.yml`, whatever order the globs are in. When two files hold the same
+key, the gem and Rails can disagree, and `normalize` then keeps the copy Rails
+does not read.
+
+**Here.** Every file that a `data.read` glob matches is read once, in sorted
+path order, as Rails reads it. An app that adds its own paths to
+`config.i18n.load_path` can still differ, so two files that give one key
+different values get a warning that names both files.
+
+Under `keep_order` the read order no longer decides a file's key order. A
+key that a later file replaces takes that file's position, and keys that the
+pattern router moves into a file come after the file's own keys.

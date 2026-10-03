@@ -176,6 +176,129 @@ fn a_duplicate_key_keeps_the_first_position() {
     );
 }
 
+/// With overlapping read globs, Rails reads `en.yml` after `devise.en.yml`.
+/// The copy of `k` that Rails reads must be the one that stays.
+#[test]
+fn overlapping_globs_keep_the_value_rails_reads() {
+    let p = Project::new(
+        "overlap",
+        "base_locale: en\n\
+         locales: [en]\n\
+         data:\n\
+         \x20 read:\n\
+         \x20   - config/locales/%{locale}.yml\n\
+         \x20   - config/locales/*%{locale}.yml\n\
+         search:\n\
+         \x20 paths: [app/]\n",
+    );
+    p.write("config/locales/en.yml", "en:\n  k: from-en\n  a: A\n")
+        .write(
+            "config/locales/devise.en.yml",
+            "en:\n  k: from-devise\n  d: D\n",
+        );
+    let (code, text) = p.run(&["normalize", "--write"]);
+    assert_eq!(code, 0, "{text}");
+    assert_eq!(
+        p.read("config/locales/en.yml"),
+        "---\nen:\n  a: A\n  k: from-en\n"
+    );
+    assert_eq!(p.read("config/locales/devise.en.yml"), "---\nen:\n  d: D\n");
+}
+
+/// A key that a later file replaces takes that file's position, so each
+/// file keeps its own key order under `keep_order`.
+#[test]
+fn keep_order_keeps_each_files_order_when_files_share_a_key() {
+    let p = Project::new(
+        "overlap-order",
+        "base_locale: en\n\
+         locales: [en]\n\
+         data:\n\
+         \x20 read:\n\
+         \x20   - config/locales/*%{locale}.yml\n\
+         \x20 keep_order: true\n\
+         search:\n\
+         \x20 paths: [app/]\n",
+    );
+    p.write(
+        "config/locales/en.yml",
+        "en:\n  a: A\n  k: from-en\n  b: B\n",
+    )
+    .write(
+        "config/locales/devise.en.yml",
+        "en:\n  k: from-devise\n  d: D\n",
+    );
+    let (code, text) = p.run(&["normalize", "--write"]);
+    assert_eq!(code, 0, "{text}");
+    assert_eq!(
+        p.read("config/locales/en.yml"),
+        "---\nen:\n  a: A\n  k: from-en\n  b: B\n"
+    );
+    assert_eq!(p.read("config/locales/devise.en.yml"), "---\nen:\n  d: D\n");
+}
+
+/// The pattern router moves keys into a file from other files. Under
+/// `keep_order` the file's own keys stay first, so the read order of the
+/// other files does not reorder it.
+#[test]
+fn keep_order_puts_a_files_own_keys_before_routed_ones() {
+    let p = Project::new(
+        "overlap-routed",
+        "base_locale: en\n\
+         locales: [en]\n\
+         data:\n\
+         \x20 read:\n\
+         \x20   - config/locales/base.%{locale}.yml\n\
+         \x20   - config/locales/*.%{locale}.yml\n\
+         \x20 write:\n\
+         \x20   - ['about.*', 'config/locales/about.%{locale}.yml']\n\
+         \x20   - config/locales/base.%{locale}.yml\n\
+         \x20 keep_order: true\n\
+         search:\n\
+         \x20 paths: [app/]\n",
+    );
+    p.write("config/locales/base.en.yml", "en:\n  z: Z\n  a: A\n")
+        .write(
+            "config/locales/about.en.yml",
+            "en:\n  about:\n    x: X\n  misc: M\n",
+        );
+    let (code, text) = p.run(&["normalize", "-p", "--write"]);
+    assert_eq!(code, 0, "{text}");
+    assert_eq!(
+        p.read("config/locales/base.en.yml"),
+        "---\nen:\n  z: Z\n  a: A\n  misc: M\n"
+    );
+    assert_eq!(
+        p.read("config/locales/about.en.yml"),
+        "---\nen:\n  about:\n    x: X\n"
+    );
+}
+
+/// The router joins the root to a file path that already holds it. With a
+/// relative `--root`, that path did not exist, so the files moved to
+/// `p/p/config/locales`, or were deleted under `--allow-delete`.
+#[test]
+fn a_relative_root_writes_the_files_in_place() {
+    let p = Project::new("relative-root", SIMPLE);
+    p.write("config/locales/en.yml", "en:\n  b: B\n  a: A\n");
+    let name = p.root.file_name().unwrap().to_str().unwrap().to_string();
+    let out = Command::new(BIN)
+        .args(["normalize", "--write", "--allow-delete", "-c"])
+        .arg(format!("{name}/config/i18n-tasks.yml"))
+        .arg("--root")
+        .arg(&name)
+        .current_dir(p.root.parent().unwrap())
+        .output()
+        .expect("binary runs");
+    let text = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(0), "{text}");
+    assert_eq!(
+        p.read("config/locales/en.yml"),
+        "---\nen:\n  a: A\n  b: B\n"
+    );
+    assert!(!p.root.join(&name).exists(), "wrote under {name}/{name}");
+}
+
 #[test]
 fn check_normalized_never_writes() {
     let p = Project::new("nowrite", SIMPLE);
