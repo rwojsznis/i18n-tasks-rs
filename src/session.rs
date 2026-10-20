@@ -23,7 +23,7 @@ pub struct SessionOptions<'a> {
     pub root: Option<&'a Path>,
     /// The locales asked for, before `all`, `base` and validation.
     pub locales: Vec<String>,
-    /// `-f json`.
+    /// `-f json` or `-f report`: machine output rather than the text table.
     pub json: bool,
 }
 

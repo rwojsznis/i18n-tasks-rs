@@ -274,6 +274,119 @@ static COMMA_NUMBER: LazyLock<Regex> = LazyLock::new(|| {
     .expect("static pattern compiles")
 });
 
+#[allow(
+    clippy::expect_used,
+    reason = "a static pattern that fails to compile is a bug here, not a run-time condition"
+)]
+static PSYCH_SEXAGESIMAL: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^[-+]?[0-9][0-9_]*(:[0-5]?[0-9]){1,2}(\.[0-9_]*)?$")
+        .expect("static pattern compiles")
+});
+
+#[allow(
+    clippy::expect_used,
+    reason = "a static pattern that fails to compile is a bug here, not a run-time condition"
+)]
+static PSYCH_FLOAT: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^[-+]?([0-9][0-9_,]*)?\.[0-9]*([eE][-+][0-9]+)?$")
+        .expect("static pattern compiles")
+});
+
+#[allow(
+    clippy::expect_used,
+    reason = "a static pattern that fails to compile is a bug here, not a run-time condition"
+)]
+static PSYCH_INTEGER: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"^[-+]?(?:0b[_,]*[0-1][0-1_,]*|0[_,]*[0-7][0-7_,]*|(?:0|[1-9](?:[0-9]|,[0-9]|_[0-9])*)|0x[_,]*[0-9a-fA-F][0-9a-fA-F_,]*)$",
+    )
+    .expect("static pattern compiles")
+});
+
+/// The number Psych reads from a plain scalar, as JSON, or `None` where Psych
+/// reads something else: a string, a date, or an infinity JSON cannot hold.
+///
+/// ref: psych/scalar_scanner.rb#tokenize, `INTEGER_LEGACY` and `FLOAT`
+pub fn psych_number(s: &str) -> Option<serde_json::Value> {
+    if PSYCH_SEXAGESIMAL.is_match(s) {
+        let float = s.contains('.');
+        let total = s.split(':').enumerate().try_fold(0f64, |sum, (i, part)| {
+            let part: f64 = part.replace('_', "").parse().ok()?;
+            Some(sum + part * 60f64.powi(i32::try_from(i.abs_diff(2)).ok()?))
+        })?;
+        return Some(if float {
+            serde_json::Number::from_f64(total)?.into()
+        } else {
+            sexagesimal_int(total)?.into()
+        });
+    }
+    if PSYCH_FLOAT.is_match(s) {
+        if s.trim_start_matches(['-', '+']) == "." {
+            return None;
+        }
+        let digits = s.replace([',', '_'], "");
+        let digits = digits.replacen(".e", "e", 1).replacen(".E", "E", 1);
+        let digits = digits.strip_suffix('.').unwrap_or(&digits);
+        return serde_json::Number::from_f64(digits.parse().ok()?).map(Into::into);
+    }
+    if PSYCH_INTEGER.is_match(s) {
+        let digits = s.replace([',', '_'], "");
+        let (negative, body) = match digits.strip_prefix('-') {
+            Some(rest) => (true, rest),
+            None => (false, digits.strip_prefix('+').unwrap_or(&digits)),
+        };
+        let (radix, body) = if let Some(rest) = body.strip_prefix("0x") {
+            (16, rest)
+        } else if let Some(rest) = body.strip_prefix("0b") {
+            (2, rest)
+        } else if body.len() > 1 && body.starts_with('0') {
+            (8, &body[1..])
+        } else {
+            (10, body)
+        };
+        let n = match u128::from_str_radix(body, radix).map(i128::try_from) {
+            Ok(Ok(magnitude)) => {
+                if negative {
+                    -magnitude
+                } else {
+                    magnitude
+                }
+            }
+            _ if radix == 10 => {
+                let n: f64 = body.parse().ok()?;
+                return serde_json::Number::from_f64(if negative { -n } else { n }).map(Into::into);
+            }
+            _ => return None,
+        };
+        return Some(integer_json(n));
+    }
+    None
+}
+
+/// An integer as JSON: exact within 64 bits, a float beyond, where Ruby keeps
+/// every digit. Accepted diff 13.
+#[allow(
+    clippy::cast_precision_loss,
+    reason = "beyond 64 bits JSON here has only a float to offer"
+)]
+fn integer_json(n: i128) -> serde_json::Value {
+    if let Ok(n) = i64::try_from(n) {
+        n.into()
+    } else if let Ok(n) = u64::try_from(n) {
+        n.into()
+    } else {
+        serde_json::Number::from_f64(n as f64).map_or(serde_json::Value::Null, Into::into)
+    }
+}
+
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "every part is an integer, so the sum is an exact integer well inside i64"
+)]
+fn sexagesimal_int(total: f64) -> Option<i64> {
+    (total.fract() == 0.0 && total.abs() < 9.0e15).then_some(total as i64)
+}
+
 fn is_yaml_number(s: &str) -> bool {
     let body = s.strip_prefix(['-', '+']).unwrap_or(s);
     if body.is_empty() {

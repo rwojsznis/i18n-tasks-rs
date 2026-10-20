@@ -28,9 +28,8 @@ impl Outcome {
 
 /// Why a row is in the report.
 ///
-/// This is a tagged enum rather than a sentence because `-f json` is an
-/// interface: `find -f json` exists so this tool and the gem can be compared
-/// mechanically, and a consumer of `missing -f json` should not have to regex
+/// This is a tagged enum rather than a sentence because `-f report` is an
+/// interface: a consumer of `missing -f report` should not have to regex
 /// English apart to recover the type, the path and the line. The prose lives in
 /// `to_text`, which the plain-text table calls and nothing else does.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]

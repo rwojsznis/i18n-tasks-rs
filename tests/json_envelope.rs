@@ -1,5 +1,5 @@
-//! The shape of `-f json`: which top-level fields each check emits, and in
-//! which order.
+//! The shape of the JSON envelope (`-f report`, and `-f json` outside
+//! `missing`): which top-level fields each check emits, and in which order.
 //!
 //! `find -f json` exists so this tool and the gem can be compared over the same
 //! project, so the JSON is an interface, not a debug dump. These tests are
@@ -86,7 +86,7 @@ fn every_check_emits_the_same_envelope_fields_first() {
     let p = Project::new("envelope");
     for (args, expected) in [
         (
-            vec!["missing", "-f", "json"],
+            vec!["missing", "-f", "report"],
             vec!["check", "passed", "config_digest", "locales", "rows"],
         ),
         (
@@ -203,13 +203,13 @@ fn a_clean_health_run_still_emits_every_report() {
 /// A row's reason is a tagged object, not an English sentence.
 ///
 /// `find -f json` exists so this tool and the gem can be compared
-/// mechanically. A consumer of `missing -f json` deserves the same: the type,
+/// mechanically. A consumer of `missing -f report` deserves the same: the type,
 /// the path and the line as fields, not a sentence to regex apart.
 #[test]
 fn row_reasons_are_tagged_objects_not_prose() {
     let p = Project::new("reasons");
 
-    let out = p.run(&["missing", "-f", "json"]);
+    let out = p.run(&["missing", "-f", "report"]);
     let missing: serde_json::Value = serde_json::from_str(&out).expect("valid JSON");
     let rows = missing["rows"].as_array().expect("rows");
     let used = rows

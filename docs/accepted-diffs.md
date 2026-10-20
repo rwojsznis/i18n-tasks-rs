@@ -275,11 +275,34 @@ Blocker B1: the emitter never folds lines. The real project already sets
 `line_width: -1`, so this matches current behaviour exactly. The config key is
 therefore not part of the new format.
 
-## 13. Reports are plain text or JSON
+## 13. Reports are plain text, the gem's JSON, or the report envelope
 
-terminal-table and Rainbow are replaced with a plain aligned table. `--format
-json` is new; the gem has no JSON output. Every JSON envelope carries the config
-digest, so a differential run can prove both tools read the same settings.
+terminal-table and Rainbow are replaced with a plain aligned table.
+
+**Gem.** `-f json` prints the result tree as compact JSON
+(`command/options/data.rb#print_forest`): for `missing`,
+`{locale => nested tree}` sorted at every level, each leaf with its own value
+(`used` leaves `null`, `plural` leaves the locale's existing forms).
+
+**Here.** `missing -f json` prints the same, byte for byte for every type
+(`tests/missing_json.rs`, against goldens recorded from gem 1.1.2). A plain
+scalar becomes the number Psych reads (`010` is 8, `0x1f` is 31, `1:30` is
+5400, `1e5` stays a string), and a Symbol inside a sequence is its name. The
+remaining differences are in values or orders no consumer of ours reads:
+
+- `plural` leaves come out with their forms sorted; the gem keeps the file's
+  order inside that one value.
+- A mapping inside a sequence comes out with its keys sorted; Ruby keeps their
+  order.
+- An integer beyond 64 bits becomes a float, and a large float is written
+  `1e+20` where Ruby writes `1.0e+20`.
+- A date is printed as written; the gem refuses the file
+  (`Psych::DisallowedClass`).
+
+`-f report` is this port's envelope on every command. The other commands still
+print the envelope under `-f json` as well, because nobody reads their gem
+JSON. Every envelope carries the config digest, so a differential run can prove
+both tools read the same settings.
 
 The JSON is an interface, not a rendering of the table, so a reported row gives
 its reason as a tagged object rather than as the sentence the table prints:

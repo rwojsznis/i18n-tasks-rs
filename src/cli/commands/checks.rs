@@ -2,11 +2,12 @@
 //!
 //! Six commands over two flag sets, so one method per check rather than one
 //! module each. Every one of them ends in `emit`, which is where the exit code
-//! comes from.
+//! comes from, except `missing -f json`, which prints the gem's tree instead.
 
-use crate::cli::args::Common;
+use crate::cli::args::{Common, Format};
 use crate::cli::commands::emit;
 use crate::cli::exit::ExitStatus;
+use crate::cli::out::outln;
 use i18n_tasks_rs::check::Check;
 use i18n_tasks_rs::report::missing::MissingType;
 use i18n_tasks_rs::report::{eq_base, interpolations, missing, normalize, unused};
@@ -59,7 +60,7 @@ pub(crate) struct MissingArgs {
     #[command(flatten)]
     common: Common,
     /// Subset of used, diff, plural. Defaults to all three.
-    #[arg(long, value_delimiter = ',', value_parser = TrimmedMissingType)]
+    #[arg(long, short = 't', value_delimiter = ',', value_parser = TrimmedMissingType)]
     types: Option<Vec<MissingType>>,
 }
 
@@ -73,6 +74,12 @@ impl MissingArgs {
             .clone()
             .unwrap_or_else(|| MissingType::ALL.to_vec());
         let used = s.scan()?;
+        if self.common.format() == Format::Json {
+            let tree = missing::tree(&s.cfg, &s.store, &used, &s.locales, &types);
+            let found = tree.as_object().is_some_and(|t| !t.is_empty());
+            outln!("{tree}");
+            return Ok(ExitStatus::found(found));
+        }
         let report = missing::report(&s.cfg, &s.store, &used, &s.locales, &types);
         emit(&s, &Check::Missing(report))
     }

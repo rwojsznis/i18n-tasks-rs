@@ -38,13 +38,21 @@ pub(crate) struct Common {
     jobs: Option<usize>,
 }
 
-/// The two output forms. A `ValueEnum` rather than a `String`, so the valid set
+/// The output forms. A `ValueEnum` rather than a `String`, so the valid set
 /// is written once: clap validates the flag against the same list the commands
 /// then match on, and `--help` lists it.
+///
+/// `json` is the gem's own JSON where a command prints it (`missing`), and the
+/// port's envelope elsewhere; `report` is the envelope everywhere. Accepted
+/// diff 13.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
-enum Format {
+pub(crate) enum Format {
+    /// A plain table.
     Text,
+    /// The gem's JSON for `missing`; the report envelope elsewhere.
     Json,
+    /// This tool's JSON envelope, on every command.
+    Report,
 }
 
 impl Common {
@@ -71,6 +79,10 @@ impl Common {
         &self.config
     }
 
+    pub(crate) fn format(&self) -> Format {
+        self.format
+    }
+
     /// Sizes the pool, then loads the project.
     ///
     /// The pool is installed here rather than in `Session::open` because it is
@@ -82,7 +94,7 @@ impl Common {
             config: &self.config,
             root: self.root.as_deref(),
             locales: self.requested_locales(),
-            json: self.format == Format::Json,
+            json: self.format != Format::Text,
         };
         Session::open(&opts, |warning| errln!("warning: {warning}"))
     }
