@@ -282,16 +282,16 @@ fn the_locales_flag_matches_the_gems_list_parser() {
 
     // Every check and `health` reads the same flag.
     for cmd in [
-        "missing",
-        "unused",
-        "check-consistent-interpolations",
-        "check-reserved-interpolations",
-        "check-normalized",
-        "normalize",
-        "health",
+        &["missing"][..],
+        &["unused"],
+        &["check-consistent-interpolations"],
+        &["check-reserved-interpolations"],
+        &["check-normalized"],
+        &["normalize", "--dry-run"],
+        &["health"],
     ] {
-        let (_, text) = run(&[cmd, "-l", "en,ru"]);
-        assert_eq!(locales_of(&text), "en,ru", "{cmd}: {text}");
+        let (_, text) = run(&[cmd, &["-l", "en,ru"]].concat());
+        assert_eq!(locales_of(&text), "en,ru", "{cmd:?}: {text}");
     }
 
     // No flag, and an explicit `all`, both mean every configured locale.
