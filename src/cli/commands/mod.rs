@@ -9,6 +9,7 @@ pub(crate) mod init_config;
 pub(crate) mod migrate_config;
 pub(crate) mod normalize;
 pub(crate) mod remove_unused;
+pub(crate) mod translate_missing;
 
 use crate::cli::exit::ExitStatus;
 use crate::cli::out::{errln, out, outln};

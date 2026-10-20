@@ -18,6 +18,7 @@ use crate::cli::commands::init_config::InitConfigArgs;
 use crate::cli::commands::migrate_config::MigrateConfigArgs;
 use crate::cli::commands::normalize::NormalizeArgs;
 use crate::cli::commands::remove_unused::RemoveUnusedArgs;
+use crate::cli::commands::translate_missing::TranslateMissingArgs;
 use crate::cli::exit::ExitStatus;
 use clap::{Parser, Subcommand};
 
@@ -62,6 +63,11 @@ enum Command {
     ///
     /// Blocker B8: writing is opt-in. Without `--write` nothing is touched.
     Normalize(NormalizeArgs),
+    /// Translate the keys the base locale has and a locale lacks, through OpenAI.
+    ///
+    /// Reads OPENAI_API_KEY, OPENAI_MODEL (default gpt-4o-mini) and
+    /// OPENAI_BASE_URL. Writes the translations, as the gem does.
+    TranslateMissing(TranslateMissingArgs),
     /// Remove ignore rules that suppress no current issue.
     CleanConfig(CleanConfigArgs),
     /// Run every check and print the statistics header.
@@ -92,6 +98,7 @@ impl Command {
             Command::CheckReservedInterpolations(a) => a.reserved_interpolations(),
             Command::CheckNormalized(a) => a.normalized(),
             Command::Normalize(a) => a.run(),
+            Command::TranslateMissing(a) => a.run(),
             Command::CleanConfig(a) => a.run(),
             Command::Health(a) => a.run(),
             Command::Find(a) => a.run(),

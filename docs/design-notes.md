@@ -155,6 +155,10 @@ to apply, `--dry-run` for the diff, and `--allow-delete` on top of `--write`
 before any file is removed. The list of files that would be deleted is always
 printed, flag or not.
 
+The one exception is `translate-missing`, which writes as the gem's does, so a
+script switching from the gem calls it the same way. It only adds keys, so it
+never empties a file.
+
 ### B9. `ruby-prism` crate lifetimes
 
 The generated node API ties node lifetimes to the `ParseResult`, so nodes cannot
@@ -176,7 +180,8 @@ Not implemented, on purpose.
 
 | Dropped | Reason |
 |---|---|
-| All translation backends, `translate-missing`, `add-missing` | Out of scope. `add-missing` also needs `Inflector.humanize` templating. |
+| Every translation backend but OpenAI, `add-missing` | Out of scope. `add-missing` also needs `Inflector.humanize` templating. |
+| The `translation:` config section | See B3: the section existed to read secrets through ERB. `translate-missing` reads them from the environment (accepted diff 34). |
 | Custom scanners, `ast_matchers`, routers and adapters named in the config | Each is a Ruby class name resolved with `ActiveSupport::Inflector.constantize`. There is no Ruby runtime. |
 | The ERB config file | See B3. |
 | The whitequark `parser` backend, the `ast` gem, `PatternMapper` | Prism only. Two parsers is the gem's main source of behaviour drift. |

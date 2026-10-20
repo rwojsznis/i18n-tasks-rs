@@ -221,6 +221,20 @@ impl LocaleTree {
         out
     }
 
+    #[must_use]
+    pub fn extended(&self, extra: impl IntoIterator<Item = Leaf>) -> LocaleTree {
+        let mut tree = LocaleTree {
+            locale: self.locale.clone(),
+            file_locales: self.file_locales.clone(),
+            ..Default::default()
+        };
+        for leaf in self.leaves.iter().cloned().chain(extra) {
+            tree.insert(leaf);
+        }
+        tree.finish();
+        tree
+    }
+
     fn finish(&mut self) {
         if !self.moved.is_empty() {
             let moved: HashSet<usize> = self.moved.drain(..).collect();

@@ -853,7 +853,7 @@ fn a_new_key_from_another_locale_lands_in_the_matching_file() {
     let cfg = p.config();
     let store = p.store();
     let fallback = i18n_tasks_rs::data::route::PatternRouter::new(&cfg);
-    let router = i18n_tasks_rs::data::route::ConservativeRouter::new(&fallback, &store);
+    let router = i18n_tasks_rs::data::route::ConservativeRouter::new(&fallback, &store, &cfg.root);
     // `user` is in both locales, so `de` keeps its own file.
     assert_eq!(
         router.route_key("de", "user").unwrap(),
