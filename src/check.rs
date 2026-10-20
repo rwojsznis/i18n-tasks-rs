@@ -1,5 +1,5 @@
-//! One check's result under the name the CLI reports it by, and the `-f json`
-//! envelopes built from it.
+//! One check's result under the name the CLI reports it by, and the JSON
+//! envelopes (`-f report`) built from it.
 //!
 //! The names are the CLI's, not the reports': `InterpolationReport` serves two
 //! checks and `NormalizeReport` serves `check-normalized` as well as

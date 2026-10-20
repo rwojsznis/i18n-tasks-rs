@@ -104,7 +104,7 @@ fn every_command_is_byte_identical_at_every_job_count() {
         "check-normalized",
         "health",
     ] {
-        for format in ["text", "json"] {
+        for format in ["text", "json", "report"] {
             let (code, single) = p.run(&[command, "-f", format, "--jobs", "1"]);
             assert!(!single.is_empty(), "{command} -f {format} printed nothing");
             // The default is the core count; 2 and 8 bracket it either way.

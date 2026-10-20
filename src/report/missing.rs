@@ -4,7 +4,7 @@
 
 use super::{KeyRow, Outcome, Reason, render_table};
 use crate::config::{Config, IgnoreType};
-use crate::data::load::Store;
+use crate::data::load::{Leaf, LocaleTree, Store};
 use crate::pattern::PatternSet;
 use crate::plural::{depluralize_key, required_categories};
 use crate::used::UsedKeys;
@@ -36,6 +36,23 @@ pub struct MissingReport {
 /// ref: missing_keys.rb#locale_key_missing?
 fn locale_key_missing(store: &Store, ignore: &PatternSet, locale: &str, key: &str) -> bool {
     !store.key_value(locale, key) && !store.external_has(locale, key) && !ignore.is_match(key)
+}
+
+/// The leaves of `source` that `locale` lacks, sorted, each with its
+/// depluralized key. `ignore` is `locale`'s `ignore_missing` set.
+///
+/// ref: missing_keys.rb#missing_diff_tree
+pub(crate) fn diff_leaves<'s>(
+    store: &'s Store,
+    source: &'s LocaleTree,
+    ignore: &PatternSet,
+    locale: &str,
+) -> impl Iterator<Item = (String, &'s Leaf)> {
+    let base = store.tree(&store.base_locale);
+    source.sorted_keys().into_iter().filter_map(move |leaf| {
+        let key = depluralize_key(&leaf.key, Some(source), base);
+        locale_key_missing(store, ignore, locale, &key).then_some((key, leaf))
+    })
 }
 
 pub fn report(
@@ -100,46 +117,149 @@ fn missing_used(cfg: &Config, store: &Store, used: &UsedKeys, locales: &[String]
 ///
 /// ref: missing_keys.rb#missing_diff_forest
 fn missing_diff(cfg: &Config, store: &Store, locales: &[String]) -> Vec<KeyRow> {
-    let base = &store.base_locale;
-    let mut rows = Vec::new();
-    let push_diff =
-        |locale: &str, compared_to: &str, ignore: &PatternSet, rows: &mut Vec<KeyRow>| {
-            let Some(source) = store.tree(compared_to) else {
-                return;
-            };
-            let source_base = store.tree(base);
-            for leaf in source.sorted_keys() {
-                let key = depluralize_key(&leaf.key, Some(source), source_base);
-                if locale_key_missing(store, ignore, locale, &key) {
-                    rows.push(KeyRow {
-                        locale: locale.to_string(),
-                        key,
-                        value: Some(leaf.value.to_display_string()),
-                        reason: Some(Reason::Diff {
-                            present_in: compared_to.to_string(),
-                        }),
-                    });
-                }
-            }
+    let mut rows: Vec<KeyRow> = diff_selection(cfg, store, locales)
+        .into_iter()
+        .map(|d| KeyRow {
+            locale: d.locale.to_string(),
+            key: d.key,
+            value: Some(d.leaf.value.to_display_string()),
+            reason: Some(Reason::Diff {
+                present_in: d.present_in.to_string(),
+            }),
+        })
+        .collect();
+    // Plural forms share one depluralized key, and two locales can hold a key
+    // the base lacks.
+    let mut seen = BTreeSet::new();
+    rows.retain(|r| seen.insert((r.locale.clone(), r.key.clone())));
+    rows
+}
+
+/// One leaf a locale lacks: its depluralized key, and the leaf itself in the
+/// locale it was found in.
+struct DiffLeaf<'a> {
+    locale: &'a str,
+    key: String,
+    leaf: &'a Leaf,
+    present_in: &'a str,
+}
+
+/// ref: missing_keys.rb#missing_diff_forest
+fn diff_selection<'a>(cfg: &Config, store: &'a Store, locales: &'a [String]) -> Vec<DiffLeaf<'a>> {
+    let base = store.base_locale.as_str();
+    let mut out = Vec::new();
+    let mut push = |locale: &'a str, present_in: &'a str, ignore: &PatternSet| {
+        let Some(source) = store.tree(present_in) else {
+            return;
         };
+        out.extend(
+            diff_leaves(store, source, ignore, locale).map(|(key, leaf)| DiffLeaf {
+                locale,
+                key,
+                leaf,
+                present_in,
+            }),
+        );
+    };
     // Present in base but not in the locale. One compiled ignore set per
     // locale, as in `missing_used`.
     for locale in locales.iter().filter(|l| *l != base) {
         let ignore = cfg.ignore_patterns(IgnoreType::Missing, Some(locale));
-        push_diff(locale, base, &ignore, &mut rows);
+        push(locale, base, &ignore);
     }
     // Present in another locale but not in base. Every comparison here asks
     // about the base locale, so one set covers them all.
     if locales.iter().any(|l| l == base) {
         let ignore = cfg.ignore_patterns(IgnoreType::Missing, Some(base));
         for locale in store.locales.iter().filter(|l| *l != base) {
-            push_diff(base, locale, &ignore, &mut rows);
+            push(base, locale, &ignore);
         }
     }
-    // The two directions can report the same key twice.
-    let mut seen = BTreeSet::new();
-    rows.retain(|r| seen.insert((r.locale.clone(), r.key.clone())));
-    rows
+    out
+}
+
+/// The gem's `-f json`: every missing key under its locale, as a nested tree
+/// sorted at every level, each leaf with its own value. A plural key keeps
+/// every form. `used` leaves are `null`; `plural` leaves are the locale's own
+/// existing forms, as the gem prints them.
+///
+/// ref: lib/i18n/tasks/command/options/data.rb#print_forest
+/// ref: lib/i18n/tasks/data/tree/nodes.rb#to_hash
+pub fn tree(
+    cfg: &Config,
+    store: &Store,
+    used: &UsedKeys,
+    locales: &[String],
+    types: &[MissingType],
+) -> serde_json::Value {
+    let mut out = serde_json::Map::new();
+    for ty in types {
+        match ty {
+            MissingType::Used => {
+                for row in missing_used(cfg, store, used, locales) {
+                    let segments: Vec<&str> = row.key.split('.').collect();
+                    put(&mut out, &row.locale, &segments, serde_json::Value::Null);
+                }
+            }
+            MissingType::Diff => {
+                for d in diff_selection(cfg, store, locales) {
+                    put(
+                        &mut out,
+                        d.locale,
+                        &d.leaf.segments(),
+                        d.leaf.value.to_json(),
+                    );
+                }
+            }
+            MissingType::Plural => {
+                for row in missing_plural(cfg, store, locales) {
+                    let Some(tree) = store.tree(&row.locale) else {
+                        continue;
+                    };
+                    for child in tree.children(&row.key) {
+                        if let Some(leaf) = tree.get(&format!("{}.{child}", row.key)) {
+                            put(
+                                &mut out,
+                                &row.locale,
+                                &leaf.segments(),
+                                leaf.value.to_json(),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+    serde_json::Value::Object(out)
+}
+
+/// Sets `value` at `locale` and `segments`. A mapping wins over a leaf, as in
+/// the gem's `merge!`.
+fn put(
+    root: &mut serde_json::Map<String, serde_json::Value>,
+    locale: &str,
+    segments: &[&str],
+    value: serde_json::Value,
+) {
+    let Some((last, parents)) = segments.split_last() else {
+        return;
+    };
+    let mut node = root;
+    for segment in std::iter::once(&locale).chain(parents) {
+        let entry = node
+            .entry(segment.to_string())
+            .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+        if !entry.is_object() {
+            *entry = serde_json::Value::Object(serde_json::Map::new());
+        }
+        let serde_json::Value::Object(next) = entry else {
+            return;
+        };
+        node = next;
+    }
+    if !node.get(*last).is_some_and(serde_json::Value::is_object) {
+        node.insert((*last).to_string(), value);
+    }
 }
 
 /// A plural node missing a required CLDR category.

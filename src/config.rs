@@ -127,7 +127,7 @@ pub struct Config {
     pub ignore_unused: IgnoreSpec,
     pub ignore_eq_base: IgnoreSpec,
     pub ignore_inconsistent_interpolations: IgnoreSpec,
-    /// A stable digest of the resolved config, reported under `--format json`
+    /// A stable digest of the resolved config, reported in the JSON envelope
     /// so a differential run can prove both tools read the same settings.
     pub digest: String,
     pub root: PathBuf,

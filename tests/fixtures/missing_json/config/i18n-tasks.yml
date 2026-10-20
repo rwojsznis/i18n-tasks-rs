@@ -1,0 +1,9 @@
+base_locale: en
+locales: [en, de, ru]
+data:
+  read:
+    - config/locales/%{locale}.yml
+search:
+  paths: [app/]
+ignore_missing:
+  - secret.*

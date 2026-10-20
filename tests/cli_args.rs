@@ -112,5 +112,8 @@ fn the_enum_flags_list_their_values_and_tolerate_spaces() {
 
     let (code, text) = missing(&["-f", "yaml"]);
     assert_eq!(code, 2, "{text}");
-    assert!(text.contains("[possible values: text, json]"), "{text}");
+    assert!(
+        text.contains("[possible values: text, json, report]"),
+        "{text}"
+    );
 }

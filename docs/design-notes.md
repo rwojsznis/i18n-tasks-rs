@@ -190,7 +190,7 @@ Not implemented, on purpose.
 | YAML comment preservation | The gem does not preserve them either. |
 | YAML anchors, aliases and merge keys | The gem reads them with `aliases: true`, expands them, and never re-creates them, so its `normalize` silently inlines them. This port **errors** on read instead. |
 | Dates, times, `!ruby/*` YAML types | Psych raises `DisallowedClass` today. Rejected with a clear error. |
-| The exact terminal-table layout and Rainbow colour codes | Reimplemented plainly, plus a `--format json` the gem lacks. |
+| The exact terminal-table layout and Rainbow colour codes | Reimplemented plainly, plus the `-f report` envelope. See accepted diff 13. |
 
 ---
 

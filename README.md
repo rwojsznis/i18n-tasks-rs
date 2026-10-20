@@ -67,7 +67,7 @@ Library uses some "tricks" - like early files _discovery_ to skip work when it's
 ## Commands
 
 ```bash
-i18n-tasks-rs missing   [-l LOCALES] [locale ...] [--types used,diff,plural]
+i18n-tasks-rs missing   [-l LOCALES] [locale ...] [-t/--types used,diff,plural]
 i18n-tasks-rs unused    [-l LOCALES] [locale ...]
 i18n-tasks-rs remove-unused [-l LOCALES] [locale ...] [-p/--pattern PATTERN]
                             [-k/--keep-order] [--write | --dry-run]
@@ -87,8 +87,10 @@ i18n-tasks-rs migrate-config [-i/--from PATH] [-o/--to PATH]
 ```
 
 Project-reading commands also accept `-c/--config PATH`, `-f/--format
-text|json`, `--root PATH`, and `-j/--jobs N`. `remove-unused`, `normalize`, and
-`clean-config` do not write unless `--write` is present. Use each command's
+text|json|report`, `--root PATH`, and `-j/--jobs N`. `missing -f json` prints
+the gem's JSON; `-f report` is this tool's JSON envelope on every command.
+`remove-unused`, `normalize`, and `clean-config` do not write unless `--write`
+is present. Use each command's
 `--help` output as the complete option reference.
 
 ## Config syntax

@@ -260,7 +260,7 @@ fn the_locales_flag_matches_the_gems_list_parser() {
             .arg("--root")
             .arg(&root)
             .arg("-f")
-            .arg("json")
+            .arg("report")
             .output()
             .expect("binary runs");
         let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
@@ -356,7 +356,7 @@ fn health_refuses_an_empty_data_set_from_the_cli() {
     assert!(text.contains("no keys detected"), "{text}");
 }
 
-/// Every check supports `--format json`, including the four `health` runs.
+/// Every check emits the JSON envelope, including the four `health` runs.
 #[test]
 fn every_check_emits_json() {
     let p = Project::new(
@@ -365,7 +365,7 @@ fn every_check_emits_json() {
         Some("t('a')\n"),
     );
     for (args, check) in [
-        (vec!["missing", "-f", "json"], "missing"),
+        (vec!["missing", "-f", "report"], "missing"),
         (vec!["unused", "-f", "json"], "unused"),
         (vec!["eq-base", "-f", "json"], "eq_base"),
         (
