@@ -163,6 +163,24 @@ pub fn plan_filtered(
     force_pattern: bool,
     keep: &impl Fn(&str, &str) -> bool,
 ) -> Result<NormalizeReport, String> {
+    plan_files(cfg, store, locales, force_pattern, keep, &|_| true)
+}
+
+/// Works out only the files `only` accepts. A file outside them is neither
+/// planned nor checked.
+///
+/// # Errors
+///
+/// A selected key cannot be routed, a locale has no data, or a write-safety
+/// guard fails on an accepted file. Nothing is written.
+pub fn plan_files(
+    cfg: &Config,
+    store: &Store,
+    locales: &[String],
+    force_pattern: bool,
+    keep: &impl Fn(&str, &str) -> bool,
+    only: &impl Fn(&Path) -> bool,
+) -> Result<NormalizeReport, String> {
     let mut changes = Vec::new();
     let mut files_routed = 0usize;
     let mut claimed: HashMap<PathBuf, String> = HashMap::new();
@@ -175,7 +193,7 @@ pub fn plan_filtered(
             .ok_or_else(|| format!("locale `{locale}` has no data"))?;
         let mut written: BTreeSet<PathBuf> = BTreeSet::new();
 
-        for dest in &destinations {
+        for dest in destinations.iter().filter(|d| only(&d.path)) {
             files_routed += 1;
             if let Some(other) = claimed.get(&dest.path) {
                 return Err(format!(
@@ -186,7 +204,7 @@ pub fn plan_filtered(
                 ));
             }
             claimed.insert(dest.path.clone(), locale.clone());
-            check_foreign_locales(tree, &dest.path, locale)?;
+            check_foreign_locales(store, &dest.path, locale)?;
 
             let mut leaves = Vec::with_capacity(dest.keys.len());
             for key in &dest.keys {
@@ -232,10 +250,10 @@ pub fn plan_filtered(
         }
 
         for path in route::origin_paths(store, locale) {
-            if written.contains(&path) {
+            if written.contains(&path) || !only(&path) {
                 continue;
             }
-            check_foreign_locales(tree, &path, locale)?;
+            check_foreign_locales(store, &path, locale)?;
             changes.push(FileChange {
                 display: display_path(cfg, &path),
                 locale: locale.clone(),
@@ -256,19 +274,31 @@ pub fn plan_filtered(
     })
 }
 
-fn check_foreign_locales(
-    tree: &crate::data::load::LocaleTree,
-    path: &Path,
-    locale: &str,
-) -> Result<(), String> {
-    let Some(found) = tree.file_locales.get(path) else {
-        return Ok(());
-    };
-    let foreign: Vec<&str> = found
-        .iter()
+/// Every locale's read is consulted, not only `locale`'s: a file this locale
+/// never read, such as the base locale's, can still be its destination. An
+/// external file is never one: its keys are not in the tree written to it.
+fn check_foreign_locales(store: &Store, path: &Path, locale: &str) -> Result<(), String> {
+    if store
+        .external
+        .values()
+        .any(|tree| tree.file_locales.contains_key(path))
+    {
+        return Err(format!(
+            "{} is external data (`data.external`), which is never written. \
+             Route `data.write` elsewhere.",
+            path.display()
+        ));
+    }
+    let mut foreign: Vec<&str> = store
+        .trees
+        .values()
+        .filter_map(|tree| tree.file_locales.get(path))
+        .flatten()
         .map(String::as_str)
         .filter(|l| *l != locale)
         .collect();
+    foreign.sort_unstable();
+    foreign.dedup();
     if foreign.is_empty() {
         return Ok(());
     }

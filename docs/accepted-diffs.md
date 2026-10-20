@@ -763,3 +763,53 @@ different values get a warning that names both files.
 Under `keep_order` the read order no longer decides a file's key order. A
 key that a later file replaces takes that file's position, and keys that the
 pattern router moves into a file come after the file's own keys.
+
+## 34. `translate-missing` — OpenAI only, opt-in writes, no English left behind
+
+**Gem.** `missing.rb:40-57` translates the `diff` missing keys of the given
+locales through the backend in `translation.backend`, merges them and writes at
+once. The OpenAI backend (`openai_translator.rb`) reads its key, model, prompts
+and temperature from the `translation:` config section, where an app usually
+reaches `OPENAI_API_KEY` and `OPENAI_MODEL` through ERB.
+`base_translator.rb:56-62` keeps a slice that fails as untranslated source text,
+so a failed request writes the base locale's text into the target locale and
+the command still exits 0. A model that drops a `X__n` placeholder loses its
+interpolation without a word.
+
+**Here.**
+
+- OpenAI is the only backend, and there is no `translation:` section: B3 keeps
+  ERB out of the config, so `OPENAI_API_KEY`, `OPENAI_MODEL` (default
+  `gpt-4o-mini`) and `OPENAI_BASE_URL` come from the environment. The request
+  is the gem's: its default system prompt, temperature 0, a JSON object
+  answer, `%{x}` sent as `X__n`. `OPENAI_BASE_URL` (default
+  `https://api.openai.com/v1`) has no gem counterpart.
+  `openai_system_prompt`, `openai_locale_prompts`, `openai_temperature`,
+  `--from`, `--pattern` and `--backend` are not ported.
+- Every request carries the JSON instruction once. The gem's
+  `system_prompt` (`openai_translator.rb:87`) `concat`s it onto the
+  `DEFAULT_SYSTEM_PROMPT` constant itself, so the nth request of a run carries
+  it n times. Both tools against one fake server: the same strings, the same
+  parameters, the same written values, and a first prompt equal byte for byte.
+- Only base-to-locale keys are translated. With the base among the locales,
+  the gem's `missing_diff_forest` (`missing_keys.rb:44-48`) also sends keys
+  that another locale has and the base lacks.
+- It writes without `--write`, as the gem does: the exception to B8. With
+  something to translate and no key it fails before any request. It prints
+  the translated keys as a table or the `-f json` envelope, not the gem's
+  YAML tree.
+- The gem cuts the flat list of strings into slices of 50
+  (`openai_translator.rb:97`), so an array can straddle two requests. Here a
+  request holds whole keys, up to 50 strings, and a key that holds more goes
+  alone. The gem sends HTML keys and plain keys in separate slices; its OpenAI
+  backend gives both the same options, so here they share a request.
+- Nothing untranslated is written. A request that fails or answers with
+  another number of strings fails its keys; a value that comes back with
+  other interpolation variables than its source fails its own key, and a
+  plural form that fails fails its sibling forms too. Failed keys stay
+  missing for the next run, the error is printed per locale, and
+  the command exits 2 after it writes what succeeded.
+- Only the files that receive a key are written, in the normalized form, as
+  `normalize --write` writes them. The configured router places each new key;
+  every existing key stays in its file, while the gem's pattern router moves
+  them.

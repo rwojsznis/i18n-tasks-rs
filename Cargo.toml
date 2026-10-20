@@ -23,6 +23,7 @@ saphyr-parser = "0.2.0"
 serde = { version = "1.0.229", features = ["derive", "rc"] }
 serde_json = "1.0.151"
 similar = { version = "3.2.0", features = ["text"] }
+ureq = { version = "3.4.2", default-features = false, features = ["rustls", "json"] }
 
 [lib]
 name = "i18n_tasks_rs"

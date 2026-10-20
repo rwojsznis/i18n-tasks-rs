@@ -41,7 +41,9 @@ pub(super) fn decide(key: &str, value: &Node, section: Option<&str>) -> Decision
         ) => Decision::Keep,
         (None, "data" | "search") => Decision::Recurse,
         (None, "internal_locale") => drop("reports are English only"),
-        (None, "translation") => drop("translation backends are out of scope"),
+        (None, "translation") => {
+            drop("`translate-missing` reads its key and model from OPENAI_API_KEY and OPENAI_MODEL")
+        }
 
         (Some("data"), "read" | "write" | "external" | "keep_order") => Decision::Keep,
         (Some("data"), "router") => match value.as_str() {

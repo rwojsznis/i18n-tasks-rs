@@ -4,7 +4,7 @@
 
 use super::{KeyRow, Outcome, Reason, render_table};
 use crate::config::{Config, IgnoreType};
-use crate::data::load::Store;
+use crate::data::load::{Leaf, LocaleTree, Store};
 use crate::pattern::PatternSet;
 use crate::plural::{depluralize_key, required_categories};
 use crate::used::UsedKeys;
@@ -36,6 +36,23 @@ pub struct MissingReport {
 /// ref: missing_keys.rb#locale_key_missing?
 fn locale_key_missing(store: &Store, ignore: &PatternSet, locale: &str, key: &str) -> bool {
     !store.key_value(locale, key) && !store.external_has(locale, key) && !ignore.is_match(key)
+}
+
+/// The leaves of `source` that `locale` lacks, sorted, each with its
+/// depluralized key. `ignore` is `locale`'s `ignore_missing` set.
+///
+/// ref: missing_keys.rb#missing_diff_tree
+pub(crate) fn diff_leaves<'a>(
+    store: &'a Store,
+    source: &'a LocaleTree,
+    ignore: &'a PatternSet,
+    locale: &'a str,
+) -> impl Iterator<Item = (String, &'a Leaf)> {
+    let base = store.tree(&store.base_locale);
+    source.sorted_keys().into_iter().filter_map(move |leaf| {
+        let key = depluralize_key(&leaf.key, Some(source), base);
+        locale_key_missing(store, ignore, locale, &key).then_some((key, leaf))
+    })
 }
 
 pub fn report(
@@ -107,19 +124,15 @@ fn missing_diff(cfg: &Config, store: &Store, locales: &[String]) -> Vec<KeyRow> 
             let Some(source) = store.tree(compared_to) else {
                 return;
             };
-            let source_base = store.tree(base);
-            for leaf in source.sorted_keys() {
-                let key = depluralize_key(&leaf.key, Some(source), source_base);
-                if locale_key_missing(store, ignore, locale, &key) {
-                    rows.push(KeyRow {
-                        locale: locale.to_string(),
-                        key,
-                        value: Some(leaf.value.to_display_string()),
-                        reason: Some(Reason::Diff {
-                            present_in: compared_to.to_string(),
-                        }),
-                    });
-                }
+            for (key, leaf) in diff_leaves(store, source, ignore, locale) {
+                rows.push(KeyRow {
+                    locale: locale.to_string(),
+                    key,
+                    value: Some(leaf.value.to_display_string()),
+                    reason: Some(Reason::Diff {
+                        present_in: compared_to.to_string(),
+                    }),
+                });
             }
         };
     // Present in base but not in the locale. One compiled ignore set per

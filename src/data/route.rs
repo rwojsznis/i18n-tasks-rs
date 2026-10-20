@@ -8,7 +8,7 @@ use crate::config::{Config, Router, interpolate_locale};
 use crate::data::load::Store;
 use crate::pattern::Pattern;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug)]
 pub struct Destination {
@@ -144,11 +144,20 @@ pub fn replace_locale(path: &str, from: &str, to: &str) -> String {
 pub struct ConservativeRouter<'a> {
     store: &'a Store,
     fallback: &'a PatternRouter,
+    root: &'a Path,
 }
 
 impl<'a> ConservativeRouter<'a> {
-    pub fn new(fallback: &'a PatternRouter, store: &'a Store) -> ConservativeRouter<'a> {
-        ConservativeRouter { store, fallback }
+    pub fn new(
+        fallback: &'a PatternRouter,
+        store: &'a Store,
+        root: &'a Path,
+    ) -> ConservativeRouter<'a> {
+        ConservativeRouter {
+            store,
+            fallback,
+            root,
+        }
     }
 
     /// # Errors
@@ -163,8 +172,12 @@ impl<'a> ConservativeRouter<'a> {
         // rewrite the locale part of that path.
         for other in self.store.locales.iter().filter(|l| *l != locale) {
             if let Some(leaf) = self.store.tree(other).and_then(|t| t.get(key)) {
-                let rewritten = replace_locale(&leaf.path.to_string_lossy(), other, locale);
-                return Ok(PathBuf::from(rewritten));
+                let (root, relative) = match leaf.path.strip_prefix(self.root) {
+                    Ok(relative) => (self.root, relative),
+                    Err(_) => (Path::new(""), &*leaf.path),
+                };
+                let rewritten = replace_locale(&relative.to_string_lossy(), other, locale);
+                return Ok(root.join(rewritten));
             }
         }
         self.fallback.route_key(locale, key)
@@ -204,7 +217,7 @@ pub fn route_filtered(
     let conservative = if force_pattern || cfg.data.router == Router::Pattern {
         None
     } else {
-        Some(ConservativeRouter::new(&pattern, store))
+        Some(ConservativeRouter::new(&pattern, store, &cfg.root))
     };
     let tree = store
         .tree(locale)
