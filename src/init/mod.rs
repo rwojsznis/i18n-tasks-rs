@@ -10,7 +10,7 @@
 //!     checked here with [`locale_for_path`], the loader's own rule, not with a
 //!     second implementation of it;
 //!   * `data.write` is the first candidate target that those same patterns read
-//!     back, so a later `normalize --write` cannot put keys where nothing looks
+//!     back, so a later `normalize` cannot put keys where nothing looks
 //!     for them;
 //!   * `base_locale` comes from `config.i18n.default_locale` in the project's
 //!     Ruby, read as text — blocker B3 applies here as everywhere else;

@@ -95,9 +95,10 @@ the scope quietly.
 
 - Comments cite the gem: `ref: lib/i18n/tasks/<file>.rb:<lines>`. Keep that
   habit — it is how a reader checks parity.
-- **Writing is opt-in.** `normalize` is the only command that touches disk, and
-  only under `--write`; deleting an emptied file additionally needs
-  `--allow-delete`. Do not add a command that writes by default.
+- **Writing is opt-in.** A command touches disk only under `--write`; deleting
+  an emptied file additionally needs `--allow-delete`. Do not add a command
+  that writes by default. The exception is `normalize`, which writes as the
+  gem's does (B8).
 - **Parallelism must not change output.** `tests/jobs.rs` holds every command,
   in both formats, byte-identical at `--jobs 1`, `2`, `8`, `16` and the default.
   A change that reorders results is a bug even if the set is the same.
