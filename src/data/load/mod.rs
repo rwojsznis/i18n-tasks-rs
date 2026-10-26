@@ -75,6 +75,29 @@ impl Value {
         }
     }
 
+    /// Ruby `#to_json` of what Psych reads: a plain number is the number Psych
+    /// reads, a Symbol inside a sequence is its name, and anything else plain,
+    /// a date included, stays as written. Accepted diff 13.
+    pub fn to_json(&self) -> serde_json::Value {
+        match self {
+            Value::Str(s) => serde_json::Value::String(s.clone()),
+            Value::Nil => serde_json::Value::Null,
+            Value::Bool(b) => serde_json::Value::Bool(*b),
+            Value::Plain(s) => {
+                if let Some(name) = s.strip_prefix(':') {
+                    serde_json::Value::String(name.to_string())
+                } else {
+                    yaml::psych_number(s).unwrap_or_else(|| serde_json::Value::String(s.clone()))
+                }
+            }
+            Value::Seq(items) => items.iter().map(Value::to_json).collect(),
+            Value::Map(entries) => entries
+                .iter()
+                .map(|(k, v)| (k.clone(), v.to_json()))
+                .collect(),
+        }
+    }
+
     pub fn as_str(&self) -> Option<&str> {
         match self {
             Value::Str(s) | Value::Plain(s) => Some(s),
@@ -835,6 +858,48 @@ mod tests {
             .to_display_string(),
             "[{\"k\" => [\"v\"]}]"
         );
+    }
+
+    #[test]
+    fn to_json_follows_ruby_to_json_of_what_psych_reads() {
+        let seq = Value::Seq(vec![
+            Value::Plain(":day".into()),
+            Value::Plain("5".into()),
+            Value::Plain("1.50".into()),
+            Value::Plain("2024-01-31".into()),
+            Value::Nil,
+            Value::Bool(false),
+            Value::Str("5".into()),
+        ]);
+        assert_eq!(
+            seq.to_json().to_string(),
+            r#"["day",5,1.5,"2024-01-31",null,false,"5"]"#
+        );
+        let psych = |plain: &str| Value::Plain(plain.into()).to_json().to_string();
+        assert_eq!(psych("010"), "8");
+        assert_eq!(psych("-010"), "-8");
+        assert_eq!(psych("0x1f"), "31");
+        assert_eq!(psych("0b101"), "5");
+        assert_eq!(psych("1_000"), "1000");
+        assert_eq!(psych("1,000"), "1000");
+        assert_eq!(psych("+5"), "5");
+        assert_eq!(psych("1:30"), "5400");
+        assert_eq!(psych("1:30:15"), "5415");
+        assert_eq!(psych("-1:30"), "-1800");
+        assert_eq!(psych("1:30.5"), "5430.0");
+        assert_eq!(psych("1e5"), r#""1e5""#);
+        assert_eq!(psych("1.5e+3"), "1500.0");
+        assert_eq!(psych("1."), "1.0");
+        assert_eq!(psych("0o17"), r#""0o17""#);
+        assert_eq!(psych("-9223372036854775808"), "-9223372036854775808");
+        assert_eq!(psych("18446744073709551615"), "18446744073709551615");
+        assert_eq!(psych("99999999999999999999"), "1e+20");
+        assert_eq!(psych("-99999999999999999999"), "-1e+20");
+        assert_eq!(
+            psych("170141183460469231731687303715884105728"),
+            "1.7014118346046923e+38"
+        );
+        assert_eq!(psych(".inf"), r#"".inf""#);
     }
 
     #[test]

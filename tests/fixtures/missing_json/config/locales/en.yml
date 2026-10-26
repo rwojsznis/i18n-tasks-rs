@@ -1,0 +1,23 @@
+en:
+  a:
+    b: Dotted
+  a-c: Dash
+  alpha:
+    b: B
+    c: Nested C
+  apples:
+    one: "%{count} apple"
+    other: "%{count} apples"
+  days:
+  - Monday
+  - Tuesday
+  flag: true
+  float: 1.5
+  nilv:
+  num: 5
+  pears:
+    one: One pear
+    other: "%{count} pears"
+  secret:
+    token: hidden
+  zeta: Z
