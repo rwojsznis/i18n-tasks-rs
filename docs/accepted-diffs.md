@@ -769,3 +769,27 @@ different values get a warning that names both files.
 Under `keep_order` the read order no longer decides a file's key order. A
 key that a later file replaces takes that file's position, and keys that the
 pattern router moves into a file come after the file's own keys.
+
+## 34. A change outside the project root needs `--allow-outside-root` (blockers B3, B8)
+
+**Gem.** `normalize` writes wherever `data.write` routes a key and rewrites or
+removes whatever `data.read` loaded, with no check against the project root.
+An absolute path, a `..` and a committed symlink all reach outside it. The gem
+config runs Ruby anyway (blocker B3), so the check would protect nothing there.
+
+**Here.** The config cannot run code, so these paths are the one way a config
+can change a file outside the project. `normalize` writes without a flag, and
+prints nothing on success, so such a change would be silent.
+
+Before it writes, `normalize` and `remove-unused --write` work out where each
+planned change lands: `..` and every symlink resolved, a deletion judged by
+the link it removes rather than the file the link names. A change that lands
+outside `--root` is listed, with the path it lands on, and the run exits 2
+unless `--allow-outside-root` is present. The list is printed under
+`--dry-run` too, and `check-normalized` does not ask, because neither writes.
+A `..` after a directory that does not exist yet cannot be resolved before
+`create_dir_all` makes it, so it counts as outside.
+
+A project whose locale files live outside its root, a shared directory in a
+monorepo, say, passes the flag. It is a CLI flag and not a config key,
+because the config is what it guards against.

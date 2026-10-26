@@ -72,12 +72,14 @@ i18n-tasks-rs unused    [-l LOCALES] [locale ...]
 i18n-tasks-rs remove-unused [-l LOCALES] [locale ...] [-p/--pattern PATTERN]
                             [-k/--keep-order] [--write | --dry-run]
                             [--allow-delete] [--allow-opaque]
+                            [--allow-outside-root]
 i18n-tasks-rs eq-base   [-l LOCALES] [locale ...]
 i18n-tasks-rs check-consistent-interpolations [-l LOCALES] [locale ...]
 i18n-tasks-rs check-reserved-interpolations   [-l LOCALES] [locale ...]
 i18n-tasks-rs check-normalized [-l LOCALES] [locale ...]
 i18n-tasks-rs normalize [-l LOCALES] [locale ...] [-p/--pattern-router]
                                      [--dry-run] [--allow-delete]
+                                     [--allow-outside-root]
 i18n-tasks-rs clean-config [-l LOCALES] [locale ...] [--write]
 i18n-tasks-rs health    [-l LOCALES] [locale ...] [-q/--quiet]
 i18n-tasks-rs find      [-l LOCALES] [locale ...]
@@ -89,7 +91,9 @@ i18n-tasks-rs migrate-config [-i/--from PATH] [-o/--to PATH]
 Project-reading commands also accept `-c/--config PATH`, `-f/--format
 text|json`, `--root PATH`, and `-j/--jobs N`. `remove-unused` and
 `clean-config` do not write unless `--write` is present; `normalize` writes, as
-the gem's does. Use each command's
+the gem's does. `normalize` and `remove-unused` change a file outside the
+project root, through `..`, an absolute path or a symlink, only under
+`--allow-outside-root`. Use each command's
 `--help` output as the complete option reference.
 
 ## Config syntax
