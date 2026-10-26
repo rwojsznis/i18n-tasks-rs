@@ -13,6 +13,7 @@
 
 I love `i18n-tasks` and it served me well for many years, but having it on git hooks become really painful as project grows because of slow feedback loop. See benchmarks below:
 
+<!-- bench:start -->
 | Command                           | i18n-tasks | i18n-tasks-rs | Speed-up |
 | --------------------------------- | ---------- | ------------- | -------- |
 | `unused`                          | 5.92 s     | **191 ms**    | 31×      |
@@ -24,6 +25,8 @@ I love `i18n-tasks` and it served me well for many years, but having it on git h
 | `find`                            | 3.71 s     | **147 ms**    | 25×      |
 
 (powered by [hyperfine](https://github.com/sharkdp/hyperfine) - ran on real production project with 3 locales; idle Macbook Pro M1 Max, Ruby 4.0.6, Rust 1.98.0)
+<!-- bench:end -->
+
 ## Was this LLMed?
 
 Obviously. What isn't those days? I tried to take different approach and contribute to i18n-tasks instead - there was a brief discussion [about caching](https://github.com/glebm/i18n-tasks/issues/753) and some ideas about [multi-process](https://github.com/glebm/i18n-tasks/pull/754) approach. However I quickly realized that patching ruby gem will never yield desired speedups. There is just too much [baggage](https://nesbitt.io/2025/12/26/how-uv-got-so-fast.html). The fact that [prism](https://github.com/ruby/prism) was released with rust bindings - it was just too good not to use.
