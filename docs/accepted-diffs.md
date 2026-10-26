@@ -786,7 +786,8 @@ planned change lands: `..` and every symlink resolved, a deletion judged by
 the link it removes rather than the file the link names. A change that lands
 outside `--root` is listed, with the path it lands on, and the run exits 2
 unless `--allow-outside-root` is present. The list is printed under
-`--dry-run` too, and `check-normalized` does not ask, because neither writes.
+`--dry-run` and by `remove-unused` without `--write` too, and
+`check-normalized` does not ask, because none of these writes.
 A `..` after a directory that does not exist yet cannot be resolved before
 `create_dir_all` makes it, so it counts as outside.
 

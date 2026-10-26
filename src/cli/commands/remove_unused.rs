@@ -8,7 +8,7 @@ use i18n_tasks_rs::check::RemoveUnusedJson;
 use i18n_tasks_rs::pattern::Pattern;
 use i18n_tasks_rs::report::{normalize, unused};
 
-/// Five `bool`s and a pattern. To the type checker the `bool`s are the same
+/// Six `bool`s and a pattern. To the type checker the `bool`s are the same
 /// thing and a transposed pair compiles, so every one is read by name, off
 /// `self`, and never passed on positionally.
 #[derive(clap::Args, Clone, Debug)]
