@@ -85,7 +85,10 @@ fn reduce(node: &pr::Node) -> ArgVal {
     }
     // Blocker B5: build a key pattern from the static parts.
     if let Some(n) = node.as_interpolated_string_node() {
-        return ArgVal::Pattern(interpolated_pattern(&n.parts()));
+        return match literal_concatenation(&n.parts()) {
+            Some(text) => ArgVal::Str(text),
+            None => ArgVal::Pattern(interpolated_pattern(&n.parts())),
+        };
     }
     if let Some(n) = node.as_interpolated_symbol_node() {
         return ArgVal::Pattern(interpolated_pattern(&n.parts()));
@@ -107,6 +110,18 @@ fn reduce(node: &pr::Node) -> ArgVal {
         return ArgVal::Unresolvable;
     }
     ArgVal::Nil
+}
+
+/// `t("a.b" \ ".c")` is Prism's interpolated string with no interpolation in
+/// it, so it is the static key `a.b.c`.
+///
+/// Accepted diff 35. ref: glebm/i18n-tasks#798 — arguments_visitor.rb#visit_interpolated_string_node
+fn literal_concatenation(parts: &pr::NodeList) -> Option<String> {
+    let mut out = String::new();
+    for part in parts {
+        out.push_str(&String::from_utf8_lossy(part.as_string_node()?.unescaped()));
+    }
+    Some(out)
 }
 
 /// `t("foo.#{bar}.title")` becomes `foo.*:.title`.
@@ -222,6 +237,12 @@ mod tests {
         assert_eq!(reduce_argument("t(:a)"), ArgVal::Str("a".into()));
         // Escapes come from `unescaped`, not from the source slice.
         assert_eq!(reduce_argument(r#"t("a\nb")"#), ArgVal::Str("a\nb".into()));
+        // Adjacent literals parse as an interpolated string, but are static.
+        assert_eq!(reduce_argument(r#"t("a" ".b")"#), ArgVal::Str("a.b".into()));
+        assert_eq!(
+            reduce_argument("t(\"a\" \\\n  \".b\" '.c')"),
+            ArgVal::Str("a.b.c".into())
+        );
 
         // Silent: nothing is recorded, not even an opaque call.
         assert_eq!(reduce_argument("t(1)"), ArgVal::Int);

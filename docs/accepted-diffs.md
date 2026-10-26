@@ -817,3 +817,22 @@ A `..` after a directory that does not exist yet cannot be resolved before
 A project whose locale files live outside its root, a shared directory in a
 monorepo, say, passes the flag. It is a CLI flag and not a config key,
 because the config is what it guards against.
+
+## 35. Adjacent string literals are one static key — bug fix
+
+**Gem.** Ruby joins adjacent string literals, so `t("some.long" \ ".key")`
+reads the key `some.long.key`. Prism parses them as an
+`InterpolatedStringNode`, and `arguments_visitor.rb#visit_interpolated_string_node`
+returns `nil` for every such node. So the gem finds no key: `unused` reports
+`some.long.key`, and `missing` does not report it when it is absent. The same
+applies to `scope:` and its array elements. This is the gem's issue #356, and
+its open PR #798 fixes it in the same way as here.
+
+**Here.** An `InterpolatedStringNode` made only of `StringNode` parts is the
+static key its parts make. An interpolated string with a real `#{}` in it
+is still a pattern (accepted diff 1). Before this change the port gave a
+pattern with no wildcard, so `unused` was already correct, but `missing`
+skipped the key.
+
+`human_attribute_name("status" ".active")` is still not scanned (accepted
+diff 4).
