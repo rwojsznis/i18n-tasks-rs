@@ -15,7 +15,7 @@ use crate::cli::out::{errln, out, outln};
 use i18n_tasks_rs::check::Check;
 use i18n_tasks_rs::report::normalize::FileChange;
 use i18n_tasks_rs::session::Session;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Prints one check and returns its exit code. The JSON form wraps the report
 /// in the shared envelope; the text form is the report's own.
@@ -37,6 +37,25 @@ pub(crate) fn report_deletions(deletions: &[&FileChange]) {
     errln!("{} file(s) end up with no keys:", deletions.len());
     for deletion in deletions {
         errln!("  {}", deletion.display);
+    }
+}
+
+pub(crate) const OUTSIDE_ROOT_REFUSAL: &str = "refusing to change the files listed above, \
+     which are outside the project root. Pass `--allow-outside-root` to allow it.";
+
+/// Names the files a write plan changes outside the project root, printed on
+/// the same terms as `report_deletions`. The landing path is shown because the
+/// planned one can be a symlink that looks local.
+pub(crate) fn report_outside_root(outside: &[(&FileChange, Option<PathBuf>)]) {
+    if outside.is_empty() {
+        return;
+    }
+    errln!("{} file(s) are outside the project root:", outside.len());
+    for (change, lands) in outside {
+        match lands {
+            Some(lands) => errln!("  {} -> {}", change.display, lands.display()),
+            None => errln!("  {}", change.display),
+        }
     }
 }
 

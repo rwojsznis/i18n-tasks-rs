@@ -4,10 +4,10 @@
 //! and the four printing macros. This file is the entry point and the place the
 //! third exit code comes from.
 
-// A panicking library is a bug: this crate returns `Result` everywhere and the
-// only command that writes does so under `--write`. Declared here rather than in
-// `Cargo.toml`, because a manifest `[lints]` table also covers `tests/`, where a
-// panic *is* the failure report. `clippy.toml` exempts the unit tests in `src/`.
+// A panicking library is a bug: this crate returns `Result` everywhere.
+// Declared here rather than in `Cargo.toml`, because a manifest `[lints]`
+// table also covers `tests/`, where a panic *is* the failure report.
+// `clippy.toml` exempts the unit tests in `src/`.
 #![warn(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 mod cli;

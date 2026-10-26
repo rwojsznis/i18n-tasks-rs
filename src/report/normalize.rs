@@ -5,8 +5,8 @@
 //! ref: lib/i18n/tasks/command/commands/data.rb
 //!
 //! Both commands share one plan. `check-normalized` reports it and stops;
-//! `normalize` applies it. Nothing here writes: `apply` is a separate call
-//! that the CLI makes only after `--write`. See blocker B8.
+//! `normalize` applies it. Nothing here writes but `apply`, which only the
+//! writing commands call.
 
 use super::Outcome;
 use crate::config::Config;
@@ -67,6 +67,32 @@ impl NormalizeReport {
             .collect()
     }
 
+    /// The changes that land outside `root`, each with the path it lands on
+    /// when that can be worked out. A config cannot run code (blocker B3), but
+    /// `data.read`, `data.write` and a committed symlink can each point
+    /// anywhere, so the CLI asks before it follows them out.
+    pub fn outside_root(&self, root: &Path) -> Vec<(&FileChange, Option<PathBuf>)> {
+        let root = landing(root);
+        self.changes
+            .iter()
+            .filter_map(|c| {
+                let lands = match c.action {
+                    // `remove_file` removes a link, not what it points at.
+                    Action::Delete => c
+                        .path
+                        .parent()
+                        .zip(c.path.file_name())
+                        .and_then(|(dir, name)| Some(landing(dir)?.join(name))),
+                    _ => landing(&c.path),
+                };
+                match (&root, &lands) {
+                    (Some(root), Some(lands)) if lands.starts_with(root) => None,
+                    _ => Some((c, lands)),
+                }
+            })
+            .collect()
+    }
+
     /// `check-normalized`. ref: `terminal_report.check_normalized_results`.
     pub fn to_check_text(&self) -> String {
         if self.changes.is_empty() {
@@ -80,7 +106,7 @@ impl NormalizeReport {
             out.push_str(&c.display);
             out.push('\n');
         }
-        out.push_str("Run `i18n-tasks-rs normalize --write` to fix\n");
+        out.push_str("Run `i18n-tasks-rs normalize` to fix\n");
         out
     }
 
@@ -290,7 +316,8 @@ fn display_path(cfg: &Config, path: &Path) -> String {
         .replace('\\', "/")
 }
 
-/// Applies the plan. Only the CLI calls this, and only after `--write`.
+/// Applies the plan. Only the writing commands call this; `check-normalized`
+/// and `--dry-run` never do.
 ///
 /// The planned `path` is written verbatim. It is deliberately not rebuilt from
 /// `display`, which cannot be reversed for a non-UTF-8 component or for a name
@@ -372,6 +399,22 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         return Err(e);
     }
     Ok(())
+}
+
+/// Where the OS puts `path`: `..` and every symlink resolved. A tail that does
+/// not exist yet holds no links, so it is joined onto its nearest existing
+/// ancestor. `None` when that tail holds a `..`, which only `create_dir_all`
+/// could resolve; the caller treats it as outside.
+fn landing(path: &Path) -> Option<PathBuf> {
+    let mut missing = Vec::new();
+    let mut at = path;
+    loop {
+        if let Ok(real) = std::fs::canonicalize(at) {
+            return Some(missing.iter().rev().fold(real, |acc, part| acc.join(part)));
+        }
+        missing.push(at.file_name()?);
+        at = at.parent()?;
+    }
 }
 
 /// The path the write lands on: a symlink is followed, so the rename replaces
@@ -481,6 +524,77 @@ mod tests {
         assert!(result.is_err(), "a read-only file was replaced");
         assert_eq!(bytes, "old\n");
         assert_eq!(left, ["en.yml"], "a temp file was left behind");
+    }
+
+    fn change(path: PathBuf, action: Action) -> FileChange {
+        FileChange {
+            display: String::new(),
+            path,
+            locale: "en".into(),
+            action,
+            after: String::new(),
+            before: String::new(),
+        }
+    }
+
+    fn outside(root: &Path, changes: Vec<FileChange>) -> Vec<PathBuf> {
+        let report = NormalizeReport {
+            changes,
+            files_routed: 0,
+        };
+        report
+            .outside_root(root)
+            .into_iter()
+            .map(|(c, _)| c.path.clone())
+            .collect()
+    }
+
+    /// `Path::starts_with` compares whole components, so a sibling whose name
+    /// starts with the root's is not taken for part of it.
+    #[test]
+    fn a_sibling_named_like_the_root_is_outside() {
+        let base = dir("outside-sibling");
+        let root = base.join("proj");
+        std::fs::create_dir_all(&root).unwrap();
+        let sibling = base.join("proj-evil/en.yml");
+        let found = outside(
+            &root,
+            vec![
+                change(sibling.clone(), Action::Create),
+                change(root.join("config/new/en.yml"), Action::Create),
+            ],
+        );
+        let _ = std::fs::remove_dir_all(&base);
+        assert_eq!(found, [sibling]);
+    }
+
+    /// Only `create_dir_all` knows where a `..` after a missing directory
+    /// lands, so the path is outside even when it would come back in.
+    #[test]
+    fn a_parent_step_after_a_missing_directory_is_outside() {
+        let root = dir("outside-missing-parent");
+        let path = root.join("missing/../en.yml");
+        let found = outside(&root, vec![change(path.clone(), Action::Create)]);
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(found, [path]);
+    }
+
+    /// `remove_file` removes the link, so deleting a link that points out
+    /// changes nothing outside; writing through it does.
+    #[cfg(unix)]
+    #[test]
+    fn a_link_that_points_out_is_outside_for_a_write_only() {
+        let base = dir("outside-link");
+        let root = base.join("proj");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(base.join("shared.yml"), "en:\n").unwrap();
+        let link = root.join("en.yml");
+        std::os::unix::fs::symlink(base.join("shared.yml"), &link).unwrap();
+        let deleted = outside(&root, vec![change(link.clone(), Action::Delete)]);
+        let written = outside(&root, vec![change(link.clone(), Action::Update)]);
+        let _ = std::fs::remove_dir_all(&base);
+        assert!(deleted.is_empty(), "{deleted:?}");
+        assert_eq!(written, [link]);
     }
 
     /// A symlinked destination is written through, as `std::fs::write` did.

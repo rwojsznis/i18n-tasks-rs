@@ -208,7 +208,7 @@ pub fn detect(root: &Path) -> Detected {
     let write = write_target(&dir, ext, &base_locale, &read).unwrap_or_else(|| {
         notes.push(format!(
             "no obvious place to write new keys: no candidate target under {dir} is read \
-             back by the patterns below, so `normalize --write` would put keys where \
+             back by the patterns below, so `normalize` would put keys where \
              nothing looks for them. Set `data.write` by hand."
         ));
         format!("{dir}/%{{locale}}.{ext}")
@@ -266,7 +266,7 @@ pub fn detect(root: &Path) -> Detected {
 /// The first candidate target the read patterns read back.
 ///
 /// Writing to a path nothing reads is the one failure a generated config can
-/// hide until `normalize --write` has already moved the keys.
+/// hide until `normalize` has already moved the keys.
 fn write_target(dir: &str, ext: &str, base: &str, read: &[String]) -> Option<String> {
     let candidates = [
         format!("{dir}/%{{locale}}.{ext}"),

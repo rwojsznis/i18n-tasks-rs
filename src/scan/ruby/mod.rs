@@ -71,7 +71,7 @@ fn scan_buffer(bytes: &[u8], path: &Path, cfg: &ScanConfig, loc: Locator) -> Fil
         .comments()
         .map(|c| {
             (
-                c.location().start_offset(),
+                c.location().start() as usize,
                 c.location().as_slice().to_vec(),
             )
         })
@@ -257,7 +257,7 @@ impl<'a> Visitor<'a> {
         raw_key: &str,
         candidates: &[String],
     ) -> Occurrence {
-        let (pos, line_num, line_pos) = self.loc.locate(node_loc.start_offset());
+        let (pos, line_num, line_pos) = self.loc.locate(node_loc.start() as usize);
         Occurrence {
             path: Arc::clone(&self.path),
             snippet: String::from_utf8_lossy(node_loc.as_slice()).into_owned(),
@@ -446,7 +446,7 @@ impl<'pr> pr::Visit<'pr> for Visitor<'_> {
             path: path.into(),
             caps: Caps::none(),
         });
-        self.record_range(loc.start_offset(), loc.end_offset());
+        self.record_range(loc.start() as usize, loc.end() as usize);
         pr::visit_module_node(self, node);
         self.scopes.pop();
     }
@@ -489,7 +489,7 @@ impl<'pr> pr::Visit<'pr> for Visitor<'_> {
         };
         let loc = node.location();
         self.scopes.push(scope);
-        self.record_range(loc.start_offset(), loc.end_offset());
+        self.record_range(loc.start() as usize, loc.end() as usize);
         pr::visit_class_node(self, node);
         self.scopes.pop();
     }
@@ -537,7 +537,7 @@ impl<'pr> pr::Visit<'pr> for Visitor<'_> {
         };
         let loc = node.location();
         self.scopes.push(scope);
-        self.record_range(loc.start_offset(), loc.end_offset());
+        self.record_range(loc.start() as usize, loc.end() as usize);
         pr::visit_def_node(self, node);
         self.scopes.pop();
     }

@@ -211,7 +211,7 @@ pub fn is_null_scalar(node: &Node) -> bool {
 /// scalar with it, and `style_of` in `src/data/emit/scalar.rs` decides from
 /// the same answer whether the value needs quotes. Two predicates for the one
 /// question drifted apart once already — the loader read `0x1f` as a string
-/// and the emitter then quoted it, so `normalize --write` turned the integer
+/// and the emitter then quoted it, so `normalize` turned the integer
 /// 31 into the string `"0x1f"`.
 ///
 /// The two halves are not equally strict, and deliberately so:

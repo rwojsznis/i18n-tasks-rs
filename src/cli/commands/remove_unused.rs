@@ -1,15 +1,16 @@
 //! ref: lib/i18n/tasks/command/commands/usages.rb#remove_unused
 
 use crate::cli::args::Common;
-use crate::cli::commands::report_deletions;
+use crate::cli::commands::{OUTSIDE_ROOT_REFUSAL, report_deletions, report_outside_root};
 use crate::cli::exit::ExitStatus;
 use crate::cli::out::{out, outln};
 use i18n_tasks_rs::check::RemoveUnusedJson;
 use i18n_tasks_rs::pattern::Pattern;
 use i18n_tasks_rs::report::{normalize, unused};
 
-/// Four `bool`s and a pattern. Same reason as `NormalizeArgs` for keeping them
-/// in a struct: every one is read by name and never passed on positionally.
+/// Six `bool`s and a pattern. To the type checker the `bool`s are the same
+/// thing and a transposed pair compiles, so every one is read by name, off
+/// `self`, and never passed on positionally.
 #[derive(clap::Args, Clone, Debug)]
 pub(crate) struct RemoveUnusedArgs {
     #[command(flatten)]
@@ -32,6 +33,9 @@ pub(crate) struct RemoveUnusedArgs {
     /// Allow writes when calls with statically unknown keys were found.
     #[arg(long)]
     allow_opaque: bool,
+    /// Allow writing or deleting a file outside the project root.
+    #[arg(long)]
+    allow_outside_root: bool,
 }
 
 impl RemoveUnusedArgs {
@@ -62,7 +66,9 @@ impl RemoveUnusedArgs {
                 !unused.removable(locale, key)
             })?;
         let deletions = report.deletions();
+        let outside = report.outside_root(&s.cfg.root);
         report_deletions(&deletions);
+        report_outside_root(&outside);
         if !s.json {
             out!("{}", unused.to_text());
             out!("{}", report.to_normalize_text(self.dry_run));
@@ -80,6 +86,12 @@ impl RemoveUnusedArgs {
                 );
             }
             return Ok(ExitStatus::Ok);
+        }
+        if !outside.is_empty() && !self.allow_outside_root {
+            if s.json {
+                outln!("{}", planned.to_json(&s)?);
+            }
+            return Err(OUTSIDE_ROOT_REFUSAL.into());
         }
         if !unused.opaque.is_empty() && !self.allow_opaque {
             if s.json {

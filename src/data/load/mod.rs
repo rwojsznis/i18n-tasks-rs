@@ -446,7 +446,7 @@ fn read_locale(
         for d in shadowed {
             warnings.push(format!(
                 "{}:{}: `{}` appears again on line {}. Rails reads only the last one, \
-                 so the tool ignores this one and `normalize --write` removes it.",
+                 so the tool ignores this one and `normalize` removes it.",
                 path.display(),
                 d.line,
                 d.key,

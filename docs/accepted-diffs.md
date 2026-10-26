@@ -178,12 +178,12 @@ Two consequences, both pinned in `tests/data_and_reports.rs`:
 
 - **Reading works, by accident.** JSON is YAML flow style, so
   `{"en": {"a": "A"}}` loads and every read-only check is correct on it.
-- **The write path would convert the file.** `normalize --write` emits YAML into
+- **The write path would convert the file.** `normalize` emits YAML into
   the `.json` name, turning `{"en": {"a": "A"}}` into `---\nen:\n  a: A\n`.
   `check-normalized` reports the file as not normalized, for the same reason.
 
 So a project with JSON locale data can run the checks and must not run
-`normalize --write`. If that ever matters, the fix is to reject a `data.read`
+`normalize`. If that ever matters, the fix is to reject a `data.read`
 entry whose extension is not `.yml`/`.yaml` rather than to build a JSON adapter.
 
 ## 5. A used key that is a prefix of another no longer destroys it — bug fix
@@ -517,12 +517,18 @@ an error instead:
 - two locales in one run route to the same destination, so the second write
   would erase the first.
 
-## 23. Writing is opt-in (blocker B8)
+## 23. `normalize` asks before it deletes (blocker B8)
 
-The gem's `normalize` writes immediately. Here `--write` is required, `--dry-run`
-prints a unified diff and writes nothing, and a file that ends up with no keys
-is only removed with `--allow-delete` on top of `--write`. The deletion list is
-always printed, flag or not.
+**Gem.** `normalize` writes at once, prints nothing, and removes a file that
+ends up with no keys (`file_system_base.rb#set`). Its pattern-router flag is
+spelled `--pattern_router`.
+
+**Here.** `normalize` writes at once and prints nothing too, and takes both
+`--pattern-router` and the gem's `--pattern_router`. Two things differ:
+`--dry-run` prints a unified diff and writes nothing, and a file that would end
+up with no keys is listed and only removed with `--allow-delete`. A plain run
+with the conservative router never empties a file, so the gem's call needs
+neither flag.
 
 ## 24. Two loader bugs the write path made dangerous — bug fixes
 
@@ -556,7 +562,7 @@ a `data.read` pattern the command emitted, judged with `locale_for_path` — the
 loader's own rule — rather than with a second implementation of it. A file that
 no pattern reads is named in the header and the command exits 1. `data.write`
 is chosen the same way: the first candidate target the emitted patterns read
-back, so `normalize --write` cannot move keys somewhere nothing looks for them.
+back, so `normalize` cannot move keys somewhere nothing looks for them.
 
 The generated config is parsed and the data loaded before the command offers to
 write anything, so it can report `645 key(s) in 4 locale(s) from 9 file(s)`
@@ -582,7 +588,7 @@ directory is added only when a file under it uses a relative key. Blocker B6 and
 accepted difference 3 make relative roots load-bearing here, and a wrong list is
 worse than a short one.
 
-Writing stays opt-in (blocker B8, difference 23): without `--write` the config
+Writing stays opt-in (blocker B8): without `--write` the config
 goes to stdout, and `--write` never replaces an existing file without `--force`.
 When the project still has a gem config the command says so and exits 1, because
 `migrate-config` keeps the ignore lists and this command has none of them.
@@ -678,7 +684,7 @@ preservation, not Psych's bytes (blocker B1), and rewriting `0x1f` to `31` in a
 file a human wrote is a change no one asked for. It also removes the reverse
 failure, which was a real bug: before one resolver answered for both directions,
 the loader read `0x1f` as a string and the emitter then quoted it, so
-`normalize --write` turned the integer `31` into the string `"0x1f"`. The same
+`normalize` turned the integer `31` into the string `"0x1f"`. The same
 held for `1:30`, `.inf` and every date.
 
 Two plain forms *are* rewritten, because they have no source text to keep — the
@@ -700,7 +706,7 @@ so the file is empty from the moment the write starts until it ends. A failure
 part-way — a full disk is the realistic one — leaves a locale file holding half
 its keys, and the loss is silent: the file still parses.
 
-**Here.** `normalize --write` writes the new bytes to a sibling temp file,
+**Here.** `normalize` writes the new bytes to a sibling temp file,
 `sync_all`s it, and renames it over the destination. The rename is atomic on
 one filesystem, so the destination holds either all of the old bytes or all of
 the new ones, and a run that fails part-way leaves some files unwritten rather
@@ -720,8 +726,8 @@ question. `-y`, `--confirm`, or any set `CONFIRM` environment variable skips
 the question. After confirmation it writes at once and deletes a locale file
 when no keys remain.
 
-**Here.** The command follows blocker B8, like `normalize`: it prints a plan
-and writes nothing unless `--write` is present. `--dry-run` prints a unified
+**Here.** The command follows blocker B8: it prints a plan and writes nothing
+unless `--write` is present. `--dry-run` prints a unified
 diff. If the plan empties a file, `--allow-delete` is also required. There is no
 interactive prompt, `--confirm`, or `CONFIRM` bypass.
 
@@ -786,3 +792,28 @@ different values get a warning that names both files.
 Under `keep_order` the read order no longer decides a file's key order. A
 key that a later file replaces takes that file's position, and keys that the
 pattern router moves into a file come after the file's own keys.
+
+## 34. A change outside the project root needs `--allow-outside-root` (blockers B3, B8)
+
+**Gem.** `normalize` writes wherever `data.write` routes a key and rewrites or
+removes whatever `data.read` loaded, with no check against the project root.
+An absolute path, a `..` and a committed symlink all reach outside it. The gem
+config runs Ruby anyway (blocker B3), so the check would protect nothing there.
+
+**Here.** The config cannot run code, so these paths are the one way a config
+can change a file outside the project. `normalize` writes without a flag, and
+prints nothing on success, so such a change would be silent.
+
+Before it writes, `normalize` and `remove-unused --write` work out where each
+planned change lands: `..` and every symlink resolved, a deletion judged by
+the link it removes rather than the file the link names. A change that lands
+outside `--root` is listed, with the path it lands on, and the run exits 2
+unless `--allow-outside-root` is present. The list is printed under
+`--dry-run` and by `remove-unused` without `--write` too, and
+`check-normalized` does not ask, because none of these writes.
+A `..` after a directory that does not exist yet cannot be resolved before
+`create_dir_all` makes it, so it counts as outside.
+
+A project whose locale files live outside its root, a shared directory in a
+monorepo, say, passes the flag. It is a CLI flag and not a config key,
+because the config is what it guards against.
