@@ -14,6 +14,7 @@ pub(crate) struct NormalizeArgs {
     #[command(flatten)]
     common: Common,
     /// Route every key through `data.write`, so keys physically move.
+    // The gem spells it `--pattern_router`. ref: lib/i18n/tasks/command/commands/data.rb:9-12
     #[arg(long, short = 'p', alias = "pattern_router")]
     pattern_router: bool,
     /// Print a unified diff of every change, and write nothing.

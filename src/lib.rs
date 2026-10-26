@@ -1,6 +1,7 @@
 // A panicking library is a bug: this crate returns `Result` everywhere.
 // Declared here rather than in `Cargo.toml`, because a manifest `[lints]`
-// table also covers `tests/`, where a panic *is* the failure report. `clippy.toml` exempts the unit tests in `src/`.
+// table also covers `tests/`, where a panic *is* the failure report.
+// `clippy.toml` exempts the unit tests in `src/`.
 #![warn(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 pub mod check;
