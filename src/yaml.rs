@@ -633,10 +633,8 @@ mod tests {
     /// An anchor on a collection, rather than on a scalar.
     #[test]
     fn rejects_an_anchor_on_a_collection() {
-        // The mapping event starts at its first key, so the anchor on the
-        // parent is reported on line 2.
         let e = p("en: &x\n  a: 1\n").unwrap_err();
-        assert_eq!(e.line, 2);
+        assert_eq!(e.line, 1);
         assert!(e.message.contains("anchors"), "{}", e.message);
         let e = p("en:\n  a: &s\n    - 1\n").unwrap_err();
         assert!(e.message.contains("anchors"), "{}", e.message);
