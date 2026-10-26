@@ -1,7 +1,7 @@
 //! `migrate-config`: a gem config translated into the config this tool reads.
 //!
 //! ref: blocker B3. The gem config is ERB over Ruby, so it is translated, not
-//! renamed. Writing is opt-in here as it is everywhere else (blocker B8).
+//! renamed. Writing is opt-in here (blocker B8).
 
 use crate::cli::commands::write_config;
 use crate::cli::exit::ExitStatus;

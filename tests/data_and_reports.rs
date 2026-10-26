@@ -268,7 +268,7 @@ fn a_duplicate_key_warns_with_both_lines() {
     assert!(
         store.warnings[0].ends_with(
             "all.yml:2: `a` appears again on line 3. Rails reads only the last one, \
-             so the tool ignores this one and `normalize --write` removes it."
+             so the tool ignores this one and `normalize` removes it."
         ),
         "{}",
         store.warnings[0]

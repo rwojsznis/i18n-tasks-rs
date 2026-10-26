@@ -5,8 +5,8 @@
 //! ref: lib/i18n/tasks/command/commands/data.rb
 //!
 //! Both commands share one plan. `check-normalized` reports it and stops;
-//! `normalize` applies it. Nothing here writes: `apply` is a separate call
-//! that the CLI makes only after `--write`. See blocker B8.
+//! `normalize` applies it. Nothing here writes but `apply`, which only the
+//! writing commands call.
 
 use super::Outcome;
 use crate::config::Config;
@@ -80,7 +80,7 @@ impl NormalizeReport {
             out.push_str(&c.display);
             out.push('\n');
         }
-        out.push_str("Run `i18n-tasks-rs normalize --write` to fix\n");
+        out.push_str("Run `i18n-tasks-rs normalize` to fix\n");
         out
     }
 
@@ -290,7 +290,8 @@ fn display_path(cfg: &Config, path: &Path) -> String {
         .replace('\\', "/")
 }
 
-/// Applies the plan. Only the CLI calls this, and only after `--write`.
+/// Applies the plan. Only the writing commands call this; `check-normalized`
+/// and `--dry-run` never do.
 ///
 /// The planned `path` is written verbatim. It is deliberately not rebuilt from
 /// `display`, which cannot be reversed for a non-UTF-8 component or for a name

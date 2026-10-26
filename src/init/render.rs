@@ -76,7 +76,7 @@ pub(super) fn render(d: &Detected, verified: Option<&Verification>) -> String {
     for pattern in &d.read {
         out.push_str(&format!("    - {}\n", quoted(pattern)));
     }
-    out.push_str("  # Where a new key goes, and only under `normalize --write`.\n  write:\n");
+    out.push_str("  # Where a moved or new key goes.\n  write:\n");
     out.push_str(&format!("    - {}\n", quoted(&d.write)));
     out.push_str(
         "  # router: conservative_router    # or pattern_router\n\

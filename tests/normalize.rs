@@ -96,7 +96,7 @@ fn golden_kitchen_sink() {
     p.write("config/locales/en.yml", &input);
 
     let before = values(&p.store());
-    let (code, text) = p.run(&["normalize", "--write"]);
+    let (code, text) = p.run(&["normalize"]);
     assert_eq!(code, 0, "{text}");
     assert_eq!(p.read("config/locales/en.yml"), expected);
 
@@ -104,7 +104,7 @@ fn golden_kitchen_sink() {
     assert_eq!(values(&p.store()), before);
 
     // Idempotence: a second run changes nothing.
-    let (code, text) = p.run(&["normalize", "--write"]);
+    let (code, text) = p.run(&["normalize"]);
     assert_eq!(code, 0, "{text}");
     assert_eq!(p.read("config/locales/en.yml"), expected);
     assert_eq!(p.run(&["check-normalized"]).0, 0);
@@ -122,7 +122,7 @@ fn a_comma_in_a_number_keeps_its_quotes() {
     let before = values(&p.store());
     assert_eq!(before["en.temp"], Value::Plain("-1,5".into()));
 
-    let (code, text) = p.run(&["normalize", "--write"]);
+    let (code, text) = p.run(&["normalize"]);
     assert_eq!(code, 0, "{text}");
     assert_eq!(
         p.read("config/locales/en.yml"),
@@ -141,7 +141,7 @@ fn a_duplicate_key_keeps_the_last_value() {
         "config/locales/en.yml",
         "en:\n  a:\n    b: y\n  a: x\n  users:\n    old: O\n    name: N1\n  users:\n    name: N2\n",
     );
-    let (code, text) = p.run(&["normalize", "--write"]);
+    let (code, text) = p.run(&["normalize"]);
     assert_eq!(code, 0, "{text}");
     assert_eq!(
         p.read("config/locales/en.yml"),
@@ -168,7 +168,7 @@ fn a_duplicate_key_keeps_the_first_position() {
         "config/locales/en.yml",
         "en:\n  z: Z\n  b:\n    old: O\n  a:\n    k: 1\n    j: J\n    k: 2\n  b:\n    new: New\n",
     );
-    let (code, text) = p.run(&["normalize", "--write"]);
+    let (code, text) = p.run(&["normalize"]);
     assert_eq!(code, 0, "{text}");
     assert_eq!(
         p.read("config/locales/en.yml"),
@@ -196,7 +196,7 @@ fn overlapping_globs_keep_the_value_rails_reads() {
             "config/locales/devise.en.yml",
             "en:\n  k: from-devise\n  d: D\n",
         );
-    let (code, text) = p.run(&["normalize", "--write"]);
+    let (code, text) = p.run(&["normalize"]);
     assert_eq!(code, 0, "{text}");
     assert_eq!(
         p.read("config/locales/en.yml"),
@@ -228,7 +228,7 @@ fn keep_order_keeps_each_files_order_when_files_share_a_key() {
         "config/locales/devise.en.yml",
         "en:\n  k: from-devise\n  d: D\n",
     );
-    let (code, text) = p.run(&["normalize", "--write"]);
+    let (code, text) = p.run(&["normalize"]);
     assert_eq!(code, 0, "{text}");
     assert_eq!(
         p.read("config/locales/en.yml"),
@@ -262,7 +262,7 @@ fn keep_order_puts_a_files_own_keys_before_routed_ones() {
             "config/locales/about.en.yml",
             "en:\n  about:\n    x: X\n  misc: M\n",
         );
-    let (code, text) = p.run(&["normalize", "-p", "--write"]);
+    let (code, text) = p.run(&["normalize", "-p"]);
     assert_eq!(code, 0, "{text}");
     assert_eq!(
         p.read("config/locales/base.en.yml"),
@@ -283,7 +283,7 @@ fn a_relative_root_writes_the_files_in_place() {
     p.write("config/locales/en.yml", "en:\n  b: B\n  a: A\n");
     let name = p.root.file_name().unwrap().to_str().unwrap().to_string();
     let out = Command::new(BIN)
-        .args(["normalize", "--write", "--allow-delete", "-c"])
+        .args(["normalize", "--allow-delete", "-c"])
         .arg(format!("{name}/config/i18n-tasks.yml"))
         .arg("--root")
         .arg(&name)
@@ -310,14 +310,38 @@ fn check_normalized_never_writes() {
 }
 
 #[test]
-fn normalize_writes_nothing_without_the_write_flag() {
-    // ref: blocker B8.
-    let p = Project::new("optin", SIMPLE);
+fn normalize_writes_by_default_and_prints_nothing_as_the_gem_does() {
+    // ref: lib/i18n/tasks/command/commands/data.rb:14-22
+    let p = Project::new("by-default", SIMPLE);
     p.write("config/locales/en.yml", "en:\n  b: B\n  a: A\n");
     let (code, text) = p.run(&["normalize"]);
-    assert_eq!(code, 0);
-    assert!(text.contains("Nothing was written"), "{text}");
-    assert_eq!(p.read("config/locales/en.yml"), "en:\n  b: B\n  a: A\n");
+    assert_eq!((code, text.as_str()), (0, ""));
+    assert_eq!(
+        p.read("config/locales/en.yml"),
+        "---\nen:\n  a: A\n  b: B\n"
+    );
+}
+
+#[test]
+fn normalize_takes_the_gems_spelling_of_the_pattern_router_flag() {
+    let p = Project::new("underscore-flag", PATTERN_CONFIG);
+    p.write(
+        "config/locales/base.en.yml",
+        "en:\n  views:\n    home:\n      title: T\n",
+    );
+    let (code, text) = p.run(&["normalize", "--pattern_router", "--allow-delete"]);
+    assert_eq!(code, 0, "{text}");
+    assert!(p.exists("config/locales/views.en.yml"));
+    assert!(!p.exists("config/locales/base.en.yml"));
+}
+
+#[test]
+fn normalize_rejects_a_write_flag() {
+    let p = Project::new("no-write-flag", SIMPLE);
+    p.write("config/locales/en.yml", "en:\n  a: A\n");
+    let (code, text) = p.run(&["normalize", "--write"]);
+    assert_eq!(code, 2, "{text}");
+    assert_eq!(p.read("config/locales/en.yml"), "en:\n  a: A\n");
 }
 
 #[test]
@@ -690,15 +714,6 @@ fn dry_run_prints_a_unified_diff_and_writes_nothing() {
     assert_eq!(p.read("config/locales/en.yml"), "en:\n  b: B\n  a: A\n");
 }
 
-#[test]
-fn write_and_dry_run_contradict_each_other() {
-    let p = Project::new("contradict", SIMPLE);
-    p.write("config/locales/en.yml", "---\nen:\n  a: A\n");
-    let (code, text) = p.run(&["normalize", "--write", "--dry-run"]);
-    assert_eq!(code, 2);
-    assert!(text.contains("contradict"), "{text}");
-}
-
 const PATTERN_CONFIG: &str = "base_locale: en\n\
      locales: [en]\n\
      data:\n\
@@ -719,7 +734,7 @@ fn the_conservative_router_keeps_a_key_in_its_own_file() {
         "config/locales/base.en.yml",
         "en:\n  views:\n    home:\n      title: T\n",
     );
-    let (code, text) = p.run(&["normalize", "--write"]);
+    let (code, text) = p.run(&["normalize"]);
     assert_eq!(code, 0, "{text}");
     assert_eq!(
         p.read("config/locales/base.en.yml"),
@@ -736,13 +751,13 @@ fn the_pattern_router_moves_keys_and_needs_allow_delete() {
         "en:\n  views:\n    home:\n      title: T\n",
     );
     // Every key moves out, so `base.en.yml` ends up empty.
-    let (code, text) = p.run(&["normalize", "--pattern-router", "--write"]);
+    let (code, text) = p.run(&["normalize", "--pattern-router"]);
     assert_eq!(code, 2, "{text}");
     assert!(text.contains("--allow-delete"), "{text}");
     assert!(text.contains("config/locales/base.en.yml"), "{text}");
     assert!(p.exists("config/locales/base.en.yml"));
 
-    let (code, text) = p.run(&["normalize", "--pattern-router", "--write", "--allow-delete"]);
+    let (code, text) = p.run(&["normalize", "--pattern-router", "--allow-delete"]);
     assert_eq!(code, 0, "{text}");
     assert_eq!(
         p.read("config/locales/views.en.yml"),
@@ -755,7 +770,7 @@ fn the_pattern_router_moves_keys_and_needs_allow_delete() {
 fn the_pattern_router_falls_through_to_the_catch_all() {
     let p = Project::new("fallthrough", PATTERN_CONFIG);
     p.write("config/locales/other.en.yml", "en:\n  misc:\n    a: A\n");
-    let (code, text) = p.run(&["normalize", "--pattern-router", "--write", "--allow-delete"]);
+    let (code, text) = p.run(&["normalize", "--pattern-router", "--allow-delete"]);
     assert_eq!(code, 0, "{text}");
     assert_eq!(
         p.read("config/locales/base.en.yml"),
@@ -777,7 +792,7 @@ fn keep_order_leaves_the_key_order_alone() {
          \x20 paths: [app/]\n",
     );
     p.write("config/locales/en.yml", "en:\n  z: Z\n  a: A\n");
-    let (code, text) = p.run(&["normalize", "--write"]);
+    let (code, text) = p.run(&["normalize"]);
     assert_eq!(code, 0, "{text}");
     assert_eq!(
         p.read("config/locales/en.yml"),
@@ -789,7 +804,7 @@ fn keep_order_leaves_the_key_order_alone() {
 fn a_file_holding_two_locales_is_refused() {
     let p = Project::new("twolocales", SIMPLE);
     p.write("config/locales/en.yml", "en:\n  a: A\nde:\n  a: A\n");
-    let (code, text) = p.run(&["normalize", "--write"]);
+    let (code, text) = p.run(&["normalize"]);
     assert_eq!(code, 2, "{text}");
     assert!(text.contains("holds the locale(s) de"), "{text}");
     assert_eq!(
@@ -815,7 +830,7 @@ fn two_locales_routed_to_one_file_are_refused() {
     );
     p.write("config/locales/en.yml", "en:\n  a: A\n");
     p.write("config/locales/de.yml", "de:\n  a: A\n");
-    let (code, text) = p.run(&["normalize", "--write"]);
+    let (code, text) = p.run(&["normalize"]);
     assert_eq!(code, 2, "{text}");
     assert!(text.contains("destination for both"), "{text}");
 }
@@ -894,7 +909,7 @@ fn writing_creates_a_missing_directory() {
         "config/locales/base.en.yml",
         "---\nen:\n  views:\n    home: Home\n  other: O\n",
     );
-    let (code, text) = p.run(&["normalize", "--pattern-router", "--write", "--allow-delete"]);
+    let (code, text) = p.run(&["normalize", "--pattern-router", "--allow-delete"]);
     assert_eq!(code, 0, "{text}");
     assert!(
         p.exists("config/locales/nested/deeper/views.en.yml"),
@@ -914,14 +929,14 @@ fn writing_creates_a_missing_directory() {
 fn normalize_emits_json() {
     let p = Project::new("normjson", SIMPLE);
     p.write("config/locales/en.yml", "en:\n  b: B\n  a: A\n");
-    let (code, text) = p.run(&["normalize", "-f", "json"]);
+    let (code, text) = p.run(&["normalize", "-f", "json", "--dry-run"]);
     assert_eq!(code, 0, "{text}");
     assert!(text.contains("\"check\": \"normalize\""), "{text}");
     assert!(text.contains("\"written\": false"), "{text}");
     assert!(text.contains("\"files_routed\""), "{text}");
     assert_eq!(p.read("config/locales/en.yml"), "en:\n  b: B\n  a: A\n");
 
-    let (code, text) = p.run(&["normalize", "-f", "json", "--write"]);
+    let (code, text) = p.run(&["normalize", "-f", "json"]);
     assert_eq!(code, 0, "{text}");
     assert!(text.contains("\"written\": true"), "{text}");
     assert_eq!(
@@ -931,7 +946,7 @@ fn normalize_emits_json() {
 }
 
 /// The deletion list is printed whether or not the run may act on it, so a
-/// `--dry-run` shows what a `--write` would remove.
+/// `--dry-run` shows what a plain run would remove.
 #[test]
 fn a_dry_run_still_lists_the_deletions() {
     let p = Project::new(
@@ -958,7 +973,7 @@ fn a_destination_directory_that_cannot_be_created_is_an_error() {
     p.write("config/locales/en.yml", "---\nen:\n  a: A\n")
         // `blocker` is a file, so `blocker/out.en.yml` has no directory.
         .write("config/locales/blocker", "not a directory\n");
-    let (code, text) = p.run(&["normalize", "--pattern-router", "--write", "--allow-delete"]);
+    let (code, text) = p.run(&["normalize", "--pattern-router", "--allow-delete"]);
     assert_eq!(code, 2, "{text}");
     assert!(text.contains("cannot create"), "{text}");
 }
@@ -973,7 +988,7 @@ fn a_destination_holding_a_backslash_is_written_where_it_was_planned() {
         "base_locale: en\nlocales: [en]\ndata:\n  read:\n    - config/locales/%{locale}.yml\n  write:\n    - \"config/back\\\\slash/%{locale}.yml\"\nsearch:\n  paths: [app/]\n",
     );
     p.write("config/locales/en.yml", "---\nen:\n  a: A\n");
-    let (code, text) = p.run(&["normalize", "--pattern-router", "--write", "--allow-delete"]);
+    let (code, text) = p.run(&["normalize", "--pattern-router", "--allow-delete"]);
     assert_eq!(code, 0, "{text}");
     assert!(
         p.exists("config/back\\slash/en.yml"),
@@ -1036,7 +1051,7 @@ fn every_number_form_round_trips_unquoted() {
     let input = "---\nen:\n  date: 2026-08-24\n  float: 1.5\n  hexy: 0x1f\n  inf: .inf\n  \
                  int: 42\n  octal: 017\n  sexa: 1:30\n";
     p.write("config/locales/en.yml", input);
-    let (code, text) = p.run(&["normalize", "--write"]);
+    let (code, text) = p.run(&["normalize"]);
     assert_eq!(code, 0, "{text}");
     assert_eq!(p.read("config/locales/en.yml"), input);
     assert_eq!(p.run(&["check-normalized"]).0, 0);
@@ -1052,7 +1067,7 @@ fn a_yaml_boolean_stays_a_boolean() {
         "config/locales/en.yml",
         "en:\n  a: yes\n  b: Off\n  c: nO\n  d: TRUE\n",
     );
-    let (code, text) = p.run(&["normalize", "--write"]);
+    let (code, text) = p.run(&["normalize"]);
     assert_eq!(code, 0, "{text}");
     assert_eq!(
         p.read("config/locales/en.yml"),
@@ -1061,7 +1076,7 @@ fn a_yaml_boolean_stays_a_boolean() {
     assert_eq!(p.run(&["check-normalized"]).0, 0);
 }
 
-/// `normalize --write` goes through a sibling temp file, so the run has to
+/// `normalize` writes through a sibling temp file, so the run has to
 /// leave the destination directory holding the locale files and nothing else.
 #[test]
 fn a_written_run_leaves_no_temp_file_behind() {
@@ -1071,7 +1086,7 @@ fn a_written_run_leaves_no_temp_file_behind() {
     );
     p.write("config/locales/en.yml", "en:\n  b: B\n  a: A\n")
         .write("config/locales/de.yml", "de:\n  b: B\n  a: A\n");
-    let (code, text) = p.run(&["normalize", "--write"]);
+    let (code, text) = p.run(&["normalize"]);
     assert_eq!(code, 0, "{text}");
     let mut names: Vec<String> = std::fs::read_dir(p.root.join("config/locales"))
         .unwrap()

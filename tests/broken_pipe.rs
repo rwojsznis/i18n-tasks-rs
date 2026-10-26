@@ -75,7 +75,7 @@ fn a_closed_stdout_is_not_a_panic() {
         vec!["missing"],
         vec!["find"],
         vec!["health"],
-        vec!["normalize"],
+        vec!["normalize", "--dry-run"],
         vec!["unused", "-f", "json"],
     ] {
         let (code, stderr) = p.run_and_hang_up(&args);
