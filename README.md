@@ -16,15 +16,15 @@ I love `i18n-tasks` and it served me well for many years, but having it on git h
 <!-- bench:start -->
 | Command                           | i18n-tasks | i18n-tasks-rs | Speed-up |
 | --------------------------------- | ---------- | ------------- | -------- |
-| `unused`                          | 5.92 s     | **191 ms**    | 31×      |
-| `missing`                         | 7.68 s     | **218 ms**    | 35×      |
-| `check-consistent-interpolations` | 3.47 s     | **99 ms**     | 35×      |
-| `check-reserved-interpolations`   | 2.37 s     | **90 ms**     | 26×      |
-| `check-normalized`                | 21.83 s    | **225 ms**    | 97×      |
-| `health` (all five checks)        | 29.12 s    | **414 ms**    | 70×      |
-| `find`                            | 3.71 s     | **147 ms**    | 25×      |
+| `unused`                          | 6.33 s     | **194 ms**    | 33×      |
+| `missing`                         | 8.09 s     | **242 ms**    | 33×      |
+| `check-consistent-interpolations` | 3.51 s     | **101 ms**    | 35×      |
+| `check-reserved-interpolations`   | 2.44 s     | **94 ms**     | 26×      |
+| `check-normalized`                | 21.36 s    | **227 ms**    | 94×      |
+| `health` (all five checks)        | 29.56 s    | **422 ms**    | 70×      |
+| `find`                            | 4.20 s     | **174 ms**    | 24×      |
 
-(powered by [hyperfine](https://github.com/sharkdp/hyperfine) - ran on real production project with 3 locales; idle Macbook Pro M1 Max, Ruby 4.0.6, Rust 1.98.0)
+(powered by [hyperfine](https://github.com/sharkdp/hyperfine) - ran on real production project with 3 locales; idle Mac Studio M1 Max, Ruby 4.0.7, Rust 1.99.1)
 <!-- bench:end -->
 
 ## Was this LLMed?
