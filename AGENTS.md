@@ -98,7 +98,8 @@ the scope quietly.
 - **Writing is opt-in.** A command touches disk only under `--write`; deleting
   an emptied file additionally needs `--allow-delete`. Do not add a command
   that writes by default. The exception is `normalize`, which writes as the
-  gem's does (B8).
+  gem's does (B8). A change outside the project root additionally needs
+  `--allow-outside-root` (accepted diff 34).
 - **Parallelism must not change output.** `tests/jobs.rs` holds every command,
   in both formats, byte-identical at `--jobs 1`, `2`, `8`, `16` and the default.
   A change that reorders results is a bug even if the set is the same.

@@ -159,6 +159,11 @@ printed, flag or not.
 switching from the gem calls it the same way. `normalize --dry-run` still
 prints the diff, and a deletion still needs `--allow-delete`.
 
+Either writing command changes a file outside the project root only under
+`--allow-outside-root` (accepted difference 34). The config cannot run code
+(B3), and without this guard it could still overwrite any file the user can
+write.
+
 ### B9. `ruby-prism` crate lifetimes
 
 The generated node API ties node lifetimes to the `ParseResult`, so nodes cannot

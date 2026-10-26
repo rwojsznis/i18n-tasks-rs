@@ -1042,6 +1042,174 @@ fn a_destination_outside_the_root_is_written_where_it_was_planned() {
     assert!(!root.join("absolute").exists());
 }
 
+/// A project at `<p.root>/proj`, so a path that leaves it still lands in a
+/// directory the test owns and removes.
+fn nested(name: &str) -> (Project, PathBuf) {
+    let p = Project::new(name, SIMPLE);
+    let root = p.root.join("proj");
+    std::fs::create_dir_all(root.join("config/locales")).unwrap();
+    std::fs::create_dir_all(root.join("app")).unwrap();
+    (p, root)
+}
+
+fn run_at(root: &Path, config: &str, args: &[&str]) -> (i32, String) {
+    std::fs::write(root.join("config/i18n-tasks.yml"), config).unwrap();
+    let out = Command::new(BIN)
+        .args(args)
+        .arg("-c")
+        .arg(root.join("config/i18n-tasks.yml"))
+        .arg("--root")
+        .arg(root)
+        .output()
+        .expect("binary runs");
+    let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
+    text.push_str(&String::from_utf8_lossy(&out.stderr));
+    (out.status.code().unwrap_or(-1), text)
+}
+
+/// One `data.write` route that climbs out with `..`, one that is absolute,
+/// and a catch-all that keeps the source file from emptying, so the
+/// `--allow-delete` guard never fires.
+fn escaping_config(p: &Project) -> String {
+    format!(
+        "base_locale: en\nlocales: [en]\ndata:\n  router: pattern_router\n  read:\n    - config/locales/%{{locale}}.yml\n  write:\n    - ['out.*', '../outside/%{{locale}}.yml']\n    - ['abs.*', '{}']\n    - config/locales/%{{locale}}.yml\nsearch:\n  paths: [app/]\n",
+        p.root.join("absolute/%{locale}.yml").display()
+    )
+}
+
+const ESCAPING_EN: &str = "en:\n  out:\n    a: A\n  abs:\n    b: B\n  keep:\n    c: C\n";
+
+/// A config cannot run code (blocker B3), so a hostile one must not reach a
+/// file outside the project either, and `normalize` writes without a flag.
+#[test]
+fn normalize_refuses_to_write_outside_the_root() {
+    let (p, root) = nested("outside-refused");
+    std::fs::write(root.join("config/locales/en.yml"), ESCAPING_EN).unwrap();
+    let (code, text) = run_at(&root, &escaping_config(&p), &["normalize"]);
+    assert_eq!(code, 2, "{text}");
+    assert!(text.contains("--allow-outside-root"), "{text}");
+    assert!(text.contains("outside/en.yml"), "{text}");
+    assert!(text.contains("absolute/en.yml"), "{text}");
+    assert!(!p.exists("outside/en.yml"), "{text}");
+    assert!(!p.exists("absolute/en.yml"), "{text}");
+    // Refused before anything is written, inside the root included.
+    assert_eq!(p.read("proj/config/locales/en.yml"), ESCAPING_EN);
+}
+
+#[test]
+fn allow_outside_root_writes_outside_the_root() {
+    let (p, root) = nested("outside-allowed");
+    std::fs::write(root.join("config/locales/en.yml"), ESCAPING_EN).unwrap();
+    let (code, text) = run_at(
+        &root,
+        &escaping_config(&p),
+        &["normalize", "--allow-outside-root"],
+    );
+    assert_eq!(code, 0, "{text}");
+    assert_eq!(p.read("outside/en.yml"), "---\nen:\n  out:\n    a: A\n");
+    assert_eq!(p.read("absolute/en.yml"), "---\nen:\n  abs:\n    b: B\n");
+    assert_eq!(
+        p.read("proj/config/locales/en.yml"),
+        "---\nen:\n  keep:\n    c: C\n"
+    );
+}
+
+/// The list is printed whether or not the run may act on it, as the deletion
+/// list is, so a `--dry-run` shows what a plain run would refuse.
+#[test]
+fn a_dry_run_lists_the_files_outside_the_root() {
+    let (p, root) = nested("outside-dry-run");
+    std::fs::write(root.join("config/locales/en.yml"), ESCAPING_EN).unwrap();
+    let (code, text) = run_at(&root, &escaping_config(&p), &["normalize", "--dry-run"]);
+    assert_eq!(code, 0, "{text}");
+    assert!(text.contains("outside the project root"), "{text}");
+    assert!(text.contains("outside/en.yml"), "{text}");
+    assert!(!p.exists("outside/en.yml"));
+}
+
+/// A repository can commit a symlink, and `apply` writes through one, so the
+/// path a write lands on is the one judged, not the path that names it.
+#[cfg(unix)]
+#[test]
+fn a_symlinked_locale_file_that_leaves_the_root_is_refused() {
+    let (p, root) = nested("outside-symlink-file");
+    p.write("shared/en.yml", "en:\n  b: B\n  a: A\n");
+    std::os::unix::fs::symlink(
+        p.root.join("shared/en.yml"),
+        root.join("config/locales/en.yml"),
+    )
+    .unwrap();
+    let (code, text) = run_at(&root, SIMPLE, &["normalize"]);
+    assert_eq!(code, 2, "{text}");
+    assert!(text.contains("shared/en.yml"), "{text}");
+    assert_eq!(p.read("shared/en.yml"), "en:\n  b: B\n  a: A\n");
+
+    let (code, text) = run_at(&root, SIMPLE, &["normalize", "--allow-outside-root"]);
+    assert_eq!(code, 0, "{text}");
+    assert_eq!(p.read("shared/en.yml"), "---\nen:\n  a: A\n  b: B\n");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symlinked_directory_that_leaves_the_root_is_refused() {
+    let (p, root) = nested("outside-symlink-dir");
+    p.write("shared/en.yml", "en:\n  b: B\n  a: A\n");
+    std::fs::remove_dir(root.join("config/locales")).unwrap();
+    std::os::unix::fs::symlink(p.root.join("shared"), root.join("config/locales")).unwrap();
+    let (code, text) = run_at(&root, SIMPLE, &["normalize"]);
+    assert_eq!(code, 2, "{text}");
+    assert_eq!(p.read("shared/en.yml"), "en:\n  b: B\n  a: A\n");
+}
+
+/// A file read from outside the root that ends up empty is a deletion there,
+/// so `--allow-delete` alone is not enough.
+#[test]
+fn a_deletion_outside_the_root_needs_the_flag_too() {
+    let (p, root) = nested("outside-delete");
+    p.write("shared/extra.en.yml", "---\nen:\n  b: B\n");
+    std::fs::write(root.join("config/locales/en.yml"), "---\nen:\n  a: A\n").unwrap();
+    let config = "base_locale: en\nlocales: [en]\ndata:\n  read:\n    - config/locales/%{locale}.yml\n    - ../shared/*.%{locale}.yml\n  write:\n    - config/locales/%{locale}.yml\nsearch:\n  paths: [app/]\n";
+
+    let (code, text) = run_at(&root, config, &["normalize", "-p", "--allow-delete"]);
+    assert_eq!(code, 2, "{text}");
+    assert!(text.contains("--allow-outside-root"), "{text}");
+    assert!(p.exists("shared/extra.en.yml"));
+
+    let (code, text) = run_at(
+        &root,
+        config,
+        &["normalize", "-p", "--allow-delete", "--allow-outside-root"],
+    );
+    assert_eq!(code, 0, "{text}");
+    assert!(!p.exists("shared/extra.en.yml"));
+    assert_eq!(
+        p.read("proj/config/locales/en.yml"),
+        "---\nen:\n  a: A\n  b: B\n"
+    );
+}
+
+#[test]
+fn remove_unused_refuses_to_write_outside_the_root() {
+    let (p, root) = nested("outside-remove-unused");
+    let before = "en:\n  used: Used\n  unused: Unused\n";
+    p.write("shared/en.yml", before);
+    std::fs::write(root.join("app/use.rb"), "I18n.t('used')\n").unwrap();
+    let config = "base_locale: en\nlocales: [en]\ndata:\n  read:\n    - ../shared/%{locale}.yml\nsearch:\n  paths: [app/]\n";
+
+    let (code, text) = run_at(&root, config, &["remove-unused", "--write"]);
+    assert_eq!(code, 2, "{text}");
+    assert!(text.contains("--allow-outside-root"), "{text}");
+    assert_eq!(p.read("shared/en.yml"), before);
+
+    let (code, text) = run_at(
+        &root,
+        config,
+        &["remove-unused", "--write", "--allow-outside-root"],
+    );
+    assert_eq!(code, 0, "{text}");
+    assert_eq!(p.read("shared/en.yml"), "---\nen:\n  used: Used\n");
+}
+
 /// Every plain form YAML 1.1 reads as a number keeps the bytes it was written
 /// with, so the Ruby type the app sees does not change.
 /// ref: docs/accepted-diffs.md §29.
