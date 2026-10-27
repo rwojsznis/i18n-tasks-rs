@@ -339,8 +339,11 @@ Confirmed on the real project — `t(:active)`, `I18n.translate(:closed)` and
 per-tag parse.
 
 A comment tag becomes a run of Ruby comment lines, one per source line, so the
-magic-comment path sees it. The gem rewrites `i18n-tasks-use ` to
-`#i18n-tasks-use ` for the same purpose (`erb_ast_scanner.rb:124`).
+magic-comment path sees it and commented-out code is never read. This is the
+gem's own rule since [glebm/i18n-tasks#763](https://github.com/glebm/i18n-tasks/pull/763):
+each line loses its leading blanks and `#`, and then gets one `#`
+(`erb_ast_scanner.rb#process_comments`). So `<%# # i18n-tasks-use t('a') %>`
+is a magic comment in both tools.
 
 One position detail: the gem computes the tag offset as
 `match.begin(0) + 2 + character.size`, where `character` is only the **first**

@@ -125,6 +125,10 @@ fn comments_html_erb_matches_the_gem_spec() {
     );
     // An HTML comment is not an ERB tag, so the gem does not see this one either.
     assert!(!keys(&scan).iter().any(|k| k == "ignore.html.comments"));
+    // ref: spec/used_keys_erb_prism_spec.rb:321
+    for key in ["erb.commented_out.translate", "erb.commented_out.multiline"] {
+        assert!(!keys(&scan).iter().any(|k| k == key), "{key}");
+    }
     // Each magic comment reports its own line. The gem puts both `ruby_multi`
     // keys on line 20; see accepted diff 6.
     assert_eq!(line_of(&scan, "erb_multi.comment.line1"), vec![10]);
@@ -144,8 +148,7 @@ fn comments_html_erb_matches_the_gem_spec() {
     );
 }
 
-/// Only a magic comment is read out of a comment tag. The gem parses the tag
-/// body as live Ruby and reports every call in it.
+/// Only a magic comment is read out of a comment tag.
 ///
 /// ref: erb_ast_scanner.rb#process_comments
 #[test]
