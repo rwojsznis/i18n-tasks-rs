@@ -408,6 +408,27 @@ fn missing_used_accepts_any_resolving_candidate_key() {
 }
 
 #[test]
+fn missing_used_reports_a_key_split_across_adjacent_literals() {
+    // A pattern is never missing, so the split key must be a key.
+    let p = Project::new("adjacent");
+    p.write("config/locales/en.yml", "en:\n  present: P\n")
+        .write(
+            "app/models/m.rb",
+            "I18n.t(\"absent.split\" \\\n       \".key\")\nI18n.t(\"pre\" \"sent\")\n",
+        );
+    let cfg = p.config(
+        "base_locale: en\nlocales: [en]\ndata:\n  read:\n    - config/locales/%{locale}.yml\nsearch:\n  paths: [app/]\n",
+    );
+    let store = Store::load(&cfg).unwrap();
+    let used = UsedKeys::scan(&cfg).unwrap();
+    let m = missing::report(&cfg, &store, &used, &store.locales, &[MissingType::Used]);
+    assert_eq!(
+        m.rows.iter().map(|r| r.key.as_str()).collect::<Vec<_>>(),
+        vec!["absent.split.key"]
+    );
+}
+
+#[test]
 fn missing_diff_runs_both_directions_when_base_is_in_scope() {
     // ref: missing_keys.rb#missing_diff_forest
     let p = Project::new("diff");

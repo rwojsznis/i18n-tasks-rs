@@ -428,6 +428,27 @@ fn a_nested_interpolation_becomes_one_wildcard() {
     );
 }
 
+/// Adjacent string literals parse as an interpolated string, but are as static
+/// as one literal (accepted diff 35). `human_attribute_name` is not scanned
+/// (accepted diff 4).
+///
+/// ref: spec/used_keys_ruby_prism_spec.rb, glebm/i18n-tasks#798
+#[test]
+fn adjacent_string_literals_are_one_static_key() {
+    let scan = scan_fixture("used_keys/adjacent_strings.rb");
+    assert_eq!(
+        sorted_unique_keys(&scan),
+        vec![
+            "adjacent.array.scope.leaf",
+            "adjacent.scope.leaf",
+            "adjacent.split.key",
+            "adjacent.three.parts",
+        ]
+    );
+    assert_eq!(sorted_patterns(&scan), vec!["adjacent.*:.ignored"]);
+    assert!(scan.opaque.is_empty(), "{:?}", scan.opaque);
+}
+
 /// ref: visitor.rb#i18n_receiver? — `::I18n` is the same receiver as `I18n`,
 /// and any other constant path is not.
 #[test]
