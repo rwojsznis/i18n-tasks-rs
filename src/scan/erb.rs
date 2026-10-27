@@ -45,10 +45,11 @@ pub fn scan(bytes: &[u8], path: &Path, cfg: &ScanConfig) -> FileScan {
 /// One Ruby buffer for the whole file, plus the map back to file offsets.
 ///
 /// A code tag is copied verbatim. A comment tag becomes a run of Ruby comment
-/// lines, so the magic-comment path in the Ruby scanner sees it — the same job
-/// the gem does with `code.gsub("i18n-tasks-use ", "#i18n-tasks-use ")` at
-/// `erb_ast_scanner.rb:124`, but per line, so a multi-line comment tag keeps
-/// every `i18n-tasks-use` in it.
+/// lines, so only the magic comments in it are read, never commented-out code.
+/// Leading blanks and `#` are dropped first, as the magic-comment prefix allows
+/// one character before `i18n-tasks-use`.
+///
+/// ref: erb_ast_scanner.rb#process_comments
 fn build_buffer(bytes: &[u8]) -> (Vec<u8>, SourceMap) {
     let mut buf: Vec<u8> = Vec::with_capacity(bytes.len() / 2);
     let mut map = SourceMap::default();
@@ -80,9 +81,14 @@ fn push_comment(buf: &mut Vec<u8>, map: &mut SourceMap, code: &[u8], file_start:
     for line in code.split_inclusive(|b| *b == b'\n') {
         let text = line.strip_suffix(b"\n").unwrap_or(line);
         let text = text.strip_suffix(b"\r").unwrap_or(text);
+        let lead = text
+            .iter()
+            .take_while(|b| matches!(b, b' ' | b'\t' | b'#'))
+            .count();
+        let text = &text[lead..];
         if !text.iter().all(u8::is_ascii_whitespace) {
             buf.push(b'#');
-            map.push(buf.len(), text.len(), file_start + offset);
+            map.push(buf.len(), text.len(), file_start + offset + lead);
             buf.extend_from_slice(text);
             buf.push(b'\n');
         }
@@ -115,7 +121,7 @@ mod tests {
         let src = "<%# i18n-tasks-use t('a')\ni18n-tasks-use t('b') %>";
         assert_eq!(
             buffer(src),
-            "# i18n-tasks-use t('a')\n#i18n-tasks-use t('b') \n"
+            "#i18n-tasks-use t('a')\n#i18n-tasks-use t('b') \n"
         );
     }
 
@@ -148,12 +154,38 @@ mod tests {
         assert!(out.opaque.is_empty(), "{:?}", out.opaque);
     }
 
+    /// ref: erb_ast_scanner.rb#process_comments — `line.sub(/\A[ \t#]*/, "")`
+    #[test]
+    fn comment_lines_drop_leading_hashes_and_blanks() {
+        let src = "<%# # i18n-tasks-use t('a')\n \t## i18n-tasks-use t('b') %>";
+        assert_eq!(
+            buffer(src),
+            "#i18n-tasks-use t('a')\n#i18n-tasks-use t('b') \n"
+        );
+    }
+
+    #[test]
+    fn a_hash_prefixed_magic_comment_in_a_comment_tag_is_read() {
+        let cfg = ScanConfig {
+            relative_roots: vec![],
+            relative_exclude_method_name_paths: vec![],
+        };
+        let src = "<%# # i18n-tasks-use t('a.one') %>\n<%#\n  # i18n-tasks-use t('a.two')\n%>\n";
+        let out = scan(
+            src.as_bytes(),
+            Path::new("app/views/x/index.html.erb"),
+            &cfg,
+        );
+        let keys: Vec<&str> = out.keys.iter().map(|(k, _)| k.as_str()).collect();
+        assert_eq!(keys, ["a.one", "a.two"]);
+    }
+
     #[test]
     fn comment_marker_maps_to_the_start_of_the_comment_text() {
         let src = "x\n<%# i18n-tasks-use t('a') %>\n";
         let (buf, map) = build_buffer(src.as_bytes());
         // The inserted `#` is filler, so it resolves to the first real byte.
         assert_eq!(String::from_utf8(buf).unwrap().as_bytes()[0], b'#');
-        assert_eq!(map.translate(0), src.find(" i18n-tasks-use").unwrap());
+        assert_eq!(map.translate(0), src.find("i18n-tasks-use").unwrap());
     }
 }
