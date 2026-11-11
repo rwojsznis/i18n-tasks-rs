@@ -101,6 +101,7 @@ if [[ $(uname) == Darwin ]]; then
 else
   machine=$(uname -sm)
 fi
+gem_version=$(cd "$project" && $gem_cmd --version | tail -n 1)
 ruby_version=$(cd "$project" && ruby -e 'print RUBY_VERSION')
 rust_version=$(cd "$repo" && rustc -V | awk '{ print $2 }')
 
@@ -114,7 +115,7 @@ rust_version=$(cd "$repo" && rustc -V | awk '{ print $2 }')
   # The project description before "; idle" is hand-written; only the machine
   # and versions are measured.
   grep '^(powered by .*; idle .*)$' "$readme" |
-    sed "s/; idle .*)\$/; idle $machine, Ruby $ruby_version, Rust $rust_version)/"
+    sed "s/; idle .*)\$/; idle $machine, i18n-tasks $gem_version, Ruby $ruby_version, Rust $rust_version)/"
 } >"$tmp/block"
 
 awk -v block="$tmp/block" '
