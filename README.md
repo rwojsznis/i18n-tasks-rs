@@ -7,7 +7,7 @@
 [![CI](https://github.com/rwojsznis/i18n-tasks-rs/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/rwojsznis/i18n-tasks-rs/actions/workflows/ci.yml?query=branch%3Amain)
 
 > [!NOTE]
-> tldr: Stripped down and simplified Rust port of [i18n-tasks](https://github.com/glebm/i18n-tasks) gem. Up to 70x faster - for all your git hooks and CI needs.
+> tldr: Stripped down and simplified Rust port of [i18n-tasks](https://github.com/glebm/i18n-tasks) gem. Up to 18x faster - for all your git hooks and CI needs.
 
 ## Why?
 
@@ -16,15 +16,15 @@ I love `i18n-tasks` and it served me well for many years, but having it on git h
 <!-- bench:start -->
 | Command                           | i18n-tasks | i18n-tasks-rs | Speed-up |
 | --------------------------------- | ---------- | ------------- | -------- |
-| `unused`                          | 6.33 s     | **194 ms**    | 33×      |
-| `missing`                         | 8.09 s     | **242 ms**    | 33×      |
-| `check-consistent-interpolations` | 3.51 s     | **101 ms**    | 35×      |
-| `check-reserved-interpolations`   | 2.44 s     | **94 ms**     | 26×      |
-| `check-normalized`                | 21.36 s    | **227 ms**    | 94×      |
-| `health` (all five checks)        | 29.56 s    | **422 ms**    | 70×      |
-| `find`                            | 4.20 s     | **174 ms**    | 24×      |
+| `unused`                          | 3.67 s     | **199 ms**    | 18×      |
+| `missing`                         | 3.15 s     | **234 ms**    | 13×      |
+| `check-consistent-interpolations` | 1.69 s     | **93 ms**     | 18×      |
+| `check-reserved-interpolations`   | 1.62 s     | **90 ms**     | 18×      |
+| `check-normalized`                | 3.00 s     | **209 ms**    | 14×      |
+| `health` (all five checks)        | 6.68 s     | **409 ms**    | 16×      |
+| `find`                            | 2.62 s     | **173 ms**    | 15×      |
 
-(powered by [hyperfine](https://github.com/sharkdp/hyperfine) - ran on real production project with 3 locales; idle Mac Studio M1 Max, Ruby 4.0.7, Rust 1.99.1)
+(powered by [hyperfine](https://github.com/sharkdp/hyperfine) - ran on real production project with 3 locales; idle MacBook Pro M1 Max, i18n-tasks 1.2.0, Ruby 4.0.9, Rust 1.99.1)
 <!-- bench:end -->
 
 ## Was this LLMed?
