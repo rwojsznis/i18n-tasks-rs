@@ -19,7 +19,7 @@ pub(super) fn full_key(
     if relative && !ctx.caps.relative {
         return None;
     }
-    let base: Vec<String> = scope.map(|s| vec![s.to_string()]).unwrap_or_default();
+    let base: Vec<String> = scope.map_or_default(|s| vec![s.to_string()]);
 
     if relative && ctx.caps.candidate {
         // ref: nodes.rb:133-150 — progressively strip trailing path segments,

@@ -35,10 +35,7 @@ pub(super) fn constant_path_parts(node: &pr::Node) -> Vec<String> {
         return vec![name_of(&n.name())];
     }
     if let Some(n) = node.as_constant_path_node() {
-        let mut parts = n
-            .parent()
-            .map(|p| constant_path_parts(&p))
-            .unwrap_or_default();
+        let mut parts = n.parent().map_or_default(|p| constant_path_parts(&p));
         if let Some(name) = n.name() {
             parts.push(name_of(&name));
         }

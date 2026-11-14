@@ -185,9 +185,7 @@ impl<'a> Visitor<'a> {
         // Any configured relative root counts, and a `.rb` file never counts as
         // a template, which is what keeps `app/controllers/*.rb` out.
         let relative_root = if is_rb { None } else { root };
-        let root_path: Vec<String> = relative_root
-            .map(|r| template_path(&posix, r))
-            .unwrap_or_default();
+        let root_path: Vec<String> = relative_root.map_or_default(|r| template_path(&posix, r));
         Visitor {
             path: Arc::from(path),
             loc,
