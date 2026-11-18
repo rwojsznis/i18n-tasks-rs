@@ -39,7 +39,7 @@
         "# renovate: datasource=crate depName=(?<depName>[^\\s]+)\\s+cargo install --locked [^\\s]+ --version (?<currentValue>\\d+\\.\\d+\\.\\d+)"
       ],
       "datasourceTemplate": "crate",
-      "versioningTemplate": "cargo"
+      "versioningTemplate": "semver"
     }
   ],
   "packageRules": [
